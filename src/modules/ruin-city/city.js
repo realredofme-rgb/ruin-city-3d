@@ -15,6 +15,8 @@ export const TOWER = new THREE.Vector3(-40, 0, -900);
 /** 所有材质共用的时间、风、灯火 uniform */
 export const U = { uTime: { value: 0 }, uWind: { value: 0.2 }, uLamp: { value: 0 } };
 const C = c => new THREE.Color(c);
+/** 流畅档（?q=low 或手机）：不做阳台和楼顶小零件 */
+const LOW = typeof location !== 'undefined' && (new URLSearchParams(location.search).get('q') === 'low' || matchMedia('(max-width: 760px)').matches);
 
 /* 高架残桥中线 */
 export const HIGHWAY = new THREE.CatmullRomCurve3([
@@ -30,7 +32,7 @@ function distToCurve(curve, x, z, n = 140) {
 
 /* ---------- 材质 ---------- */
 export function makeMaterials() {
-  const tw = wallTextures('tower', 11), hs = wallTextures('house', 23);
+  const hs = wallTextures('house', 23);
   const seam = (() => { // 白塔的发光接缝
     const c = document.createElement('canvas'); c.width = 64; c.height = 256; const g = c.getContext('2d');
     g.fillStyle = '#000'; g.fillRect(0, 0, 64, 256);
@@ -38,8 +40,10 @@ export function makeMaterials() {
     g.fillStyle = '#c8f6ff'; g.fillRect(8, 100, 10, 3);
     const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; return t;
   })();
+  const tex = Object.fromEntries(STYLES.map((k, i) => [k, ruinTextures(k, 11 + i * 7)]));
+  const towerMat = k => weatherMat(new THREE.MeshStandardMaterial({ map: tex[k].map, bumpMap: tex[k].bump, bumpScale: 2.2, roughnessMap: tex[k].rough, vertexColors: true, roughness: 1 }));
   return {
-    tower: new THREE.MeshStandardMaterial({ map: tw.map, vertexColors: true, roughness: 0.93 }),
+    tower: towerMat('grid'), towerResi: towerMat('resi'), towerBrut: towerMat('brut'),
     house: litMat(new THREE.MeshStandardMaterial({ map: hs.map, emissiveMap: hs.emissiveMap, emissive: 0xffffff, emissiveIntensity: 1.6, vertexColors: true, roughness: 0.88 })),
     plain: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }),
     tree: swayMat(),
@@ -53,6 +57,106 @@ export function makeMaterials() {
     crystal: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.9, 2.4, 2.8) }),
     ring: new THREE.MeshBasicMaterial({ color: new THREE.Color(1.2, 2.2, 2.6), transparent: true, opacity: 0.75, depthWrite: false })
   };
+}
+
+/* ---------- 废墟高楼的立面 ---------- */
+// 三种立面：grid 办公楼（横向带窗 + 竖肋）、resi 住宅（方窗 + 阳台）、brut 粗野主义（深窗洞 + 木模板纹）
+export const STYLES = ['grid', 'resi', 'brut'];
+/** 每种立面三张图：颜色、凹凸（窗洞凹进去、窗框和楼板凸出来）、粗糙度（玻璃反光） */
+function ruinTextures(style, seed) {
+  const R = rng(seed), S = 1024, cw = S / 4, ch = S / 4;
+  const mk = () => { const c = document.createElement('canvas'); c.width = c.height = S; return [c, c.getContext('2d')]; };
+  const [c, g] = mk(), [b, gb] = mk(), [r, gr] = mk();
+  g.fillStyle = { grid: '#d2cdc2', resi: '#dbd4c6', brut: '#c3beb3' }[style]; g.fillRect(0, 0, S, S);
+  gb.fillStyle = '#8c8c8c'; gb.fillRect(0, 0, S, S);
+  gr.fillStyle = '#f0f0f0'; gr.fillRect(0, 0, S, S);
+  const rect = (ctx, col, x, y, w, h) => { ctx.fillStyle = col; ctx.fillRect(x, y, w, h); };
+  // 大块斑驳与细颗粒
+  for (let i = 0; i < 900; i++) { const s = 6 + R() * 50; g.fillStyle = `rgba(${R() < 0.5 ? '70,64,54' : '255,250,238'},${0.02 + R() * 0.045})`; g.beginPath(); g.ellipse(R() * S, R() * S, s, s * (0.4 + R()), R() * 3, 0, 7); g.fill(); }
+  for (let i = 0; i < 9000; i++) { const v = R() < 0.5 ? 40 : 230; g.fillStyle = `rgba(${v},${v},${v - 8},${0.05 + R() * 0.08})`; g.fillRect(R() * S, R() * S, 1 + R() * 2, 1 + R() * 2); }
+  if (style === 'brut') for (let y = 0; y < S; y += 16) { rect(g, 'rgba(60,56,50,0.10)', 0, y, S, 2); rect(gb, 'rgba(40,40,40,0.5)', 0, y, S, 2); for (let x = R() * 200; x < S; x += 120 + R() * 200) rect(g, 'rgba(60,56,50,0.08)', x, y, 2, 16); }
+  if (style === 'resi') for (let i = 0; i <= 8; i++) { rect(g, 'rgba(80,74,64,0.25)', i * S / 8 - 1, 0, 2, S); rect(gb, '#555', i * S / 8 - 1, 0, 2, S); }
+  for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) {
+    const x0 = i * cw, y0 = j * ch;
+    // 楼板边（凸出的一条），不能盖到 v≈0.03 处：顶面和底面取的是那里的素墙色
+    rect(g, 'rgba(95,90,80,0.45)', x0, y0 + ch - 12, cw, 10); rect(gb, '#c8c8c8', x0, y0 + ch - 12, cw, 10);
+    let wx, wy, ww, wh;
+    if (style === 'grid') { wx = x0; ww = cw; wy = y0 + ch * 0.26; wh = ch * 0.5; }
+    else if (style === 'resi') { ww = cw * 0.5; wh = ch * 0.52; wx = x0 + (cw - ww) / 2; wy = y0 + ch * 0.2; }
+    else { ww = cw * 0.32; wh = ch * 0.44; wx = x0 + (cw - ww) / 2; wy = y0 + ch * 0.24; }
+    const st = R(), broken = st < 0.42, boarded = !broken && st < 0.52;
+    // 窗洞：先画深色洞口，再按状态填玻璃、残片或木板
+    rect(g, '#141617', wx, wy, ww, wh); rect(gb, '#141414', wx, wy, ww, wh); rect(gr, '#e0e0e0', wx, wy, ww, wh);
+    if (boarded) { for (let k = 0; k < wh; k += 14) rect(g, `rgb(${96 + R() * 30},${74 + R() * 20},${52 + R() * 14})`, wx + 3, wy + k + 1, ww - 6, 11); rect(gb, '#3a3a3a', wx, wy, ww, wh); }
+    else if (!broken) {
+      const gg = g.createLinearGradient(wx, wy, wx + ww * 0.3, wy + wh); gg.addColorStop(0, '#7a8a90'); gg.addColorStop(1, '#3c474b'); g.fillStyle = gg; g.fillRect(wx + 2, wy + 2, ww - 4, wh - 4);
+      rect(g, 'rgba(210,225,230,0.22)', wx + 6, wy + 4, ww * 0.18, wh - 8); rect(gr, '#3a3a3a', wx + 2, wy + 2, ww - 4, wh - 4); rect(gb, '#2a2a2a', wx + 2, wy + 2, ww - 4, wh - 4);
+    } else for (let k = 0; k < 3; k++) { // 碎玻璃残片挂在窗角
+      g.fillStyle = 'rgba(90,108,114,0.85)'; gr.fillStyle = '#404040';
+      const cx = R() < 0.5 ? wx : wx + ww, cy = R() < 0.5 ? wy : wy + wh, s = 10 + R() * 26;
+      for (const ctx of [g, gr]) { ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + (cx === wx ? s : -s), cy); ctx.lineTo(cx, cy + (cy === wy ? s * 1.4 : -s * 1.4)); ctx.fill(); }
+    }
+    // 窗框与竖梃
+    const fr = 'rgba(70,72,70,0.9)', mul = style === 'grid' ? 3 : style === 'resi' ? 2 : 1;
+    for (let k = 0; k <= mul; k++) { const xx = wx + k * ww / mul - 3; rect(g, fr, xx, wy, 6, wh); rect(gb, '#d8d8d8', xx, wy, 6, wh); }
+    rect(g, fr, wx, wy - 3, ww, 6); rect(gb, '#d8d8d8', wx, wy - 3, ww, 6);
+    if (style !== 'grid') { rect(g, 'rgba(225,220,208,0.9)', wx - 8, wy + wh, ww + 16, 8); rect(gb, '#e8e8e8', wx - 8, wy + wh, ww + 16, 8); } // 窗台
+    if (style === 'brut') { rect(g, 'rgba(30,30,28,0.35)', wx, wy, ww, 10); rect(g, 'rgba(30,30,28,0.25)', wx, wy, 8, wh); } // 深窗洞的阴影
+    // 窗下的锈水痕
+    if (R() < 0.5) { const sx = wx + R() * ww, gl = g.createLinearGradient(0, wy + wh, 0, wy + wh + 40 + R() * 110); gl.addColorStop(0, 'rgba(112,74,44,0.32)'); gl.addColorStop(1, 'rgba(112,74,44,0)'); g.fillStyle = gl; g.fillRect(sx, wy + wh, 3 + R() * 9, 150); }
+  }
+  // 雨水冲刷的竖向条痕
+  for (let i = 0; i < 140; i++) { const x = R() * S, y = R() * S, l = 80 + R() * 260, gl = g.createLinearGradient(0, y, 0, y + l); gl.addColorStop(0, 'rgba(62,58,48,0.2)'); gl.addColorStop(1, 'rgba(62,58,48,0)'); g.fillStyle = gl; g.fillRect(x, y, 2 + R() * 7, l); }
+  // 裂缝
+  for (let i = 0; i < 14; i++) {
+    let x = R() * S, y = R() * S; g.strokeStyle = 'rgba(40,36,32,0.35)'; gb.strokeStyle = '#202020'; g.lineWidth = gb.lineWidth = 1.5;
+    g.beginPath(); gb.beginPath(); g.moveTo(x, y); gb.moveTo(x, y);
+    for (let k = 0; k < 7; k++) { x += (R() - 0.5) * 40; y += 8 + R() * 26; g.lineTo(x, y); gb.lineTo(x, y); }
+    g.stroke(); gb.stroke();
+  }
+  // 顶面、底面取 v≈0.03 处：在那附近铺一块干净的素墙
+  rect(g, { grid: '#bdb8ad', resi: '#c6bfb1', brut: '#b0aba0' }[style], 0, S - 44, 64, 30);
+  const T = cv => { const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8; return t; };
+  const map = T(c); map.colorSpace = THREE.SRGBColorSpace;
+  return { map, bump: T(b), rough: T(r) };
+}
+
+/* 高楼的风化：墙根污渍、断口下方的雨痕、大片色斑（打破贴图重复）。aW = (离楼底的高度, 离这段墙顶的距离) */
+function weatherMat(m) {
+  m.onBeforeCompile = sh => {
+    sh.vertexShader = 'attribute vec2 aW;\nvarying vec2 vW;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nvW = aW;');
+    sh.fragmentShader = `varying vec2 vW;
+      float wh1(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      float wn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f); return mix(mix(wh1(i), wh1(i + vec2(1, 0)), f.x), mix(wh1(i + vec2(0, 1)), wh1(i + vec2(1, 1)), f.x), f.y); }
+      ` + sh.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+      #ifdef USE_MAP
+      {
+        vec2 u = vMapUv;
+        float patchy = wn(u * vec2(1.3, 0.9) + 7.) * .6 + wn(u * 4.1) * .4;
+        diffuseColor.rgb *= mix(.86, 1.06, patchy);
+        float col = floor(u.x * 26.), hs = wh1(vec2(col, 3.7)), len = 4. + hs * 30.;
+        float prof = sin(fract(u.x * 26.) * 3.1416);
+        float streak = (1. - smoothstep(0., len, vW.y)) * step(.42, hs) * prof * (.6 + .4 * wn(vec2(u.x * 90., u.y * 2.)));
+        diffuseColor.rgb *= 1. - .3 * streak;
+        float grime = 1. - smoothstep(0., 10. + wn(u * 3.) * 8., vW.x);
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(.55, .6, .5), grime * .7);
+      }
+      #endif`);
+  };
+  return m;
+}
+
+/** 给每个顶点附上 aW（见 weatherMat）。base 是当前这栋楼的楼底高度 */
+class WBuilder extends Builder {
+  constructor() { super(); this.base = 0; }
+  add(g, m, color, moss, mossTop, lit) {
+    g = g.index ? g.toNonIndexed() : g;
+    g.computeBoundingBox();
+    const top = g.boundingBox.max.y, p = g.attributes.position, a = new Float32Array(p.count * 2), v = new THREE.Vector3();
+    for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i); a[i * 2 + 1] = top - v.y; if (m) v.applyMatrix4(m); a[i * 2] = v.y - this.base; }
+    super.add(g, m, color, moss, mossTop, lit);
+    this.list[this.list.length - 1].setAttribute('aW', new THREE.BufferAttribute(a, 2));
+  }
 }
 
 /* 窗户按 aLit 门槛逐户亮起 */
@@ -108,10 +212,146 @@ function bushGeo() {
 /* ================================================================= */
 export function buildCity(scene, M) {
   const R = rng(20261125);
-  const tower = new Builder(), house = new Builder(true), plain = new Builder(), leaf = new Builder(), metal = new Builder(), rock = new Builder(), glowB = new Builder();
+  const TB = Object.fromEntries(STYLES.map(k => [k, new WBuilder()]));
+  const detail = new Builder(); // 阳台、楼顶水箱这类小零件：离得远时整块隐藏
+  const house = new Builder(true), plain = new Builder(), leaf = new Builder(), metal = new Builder(), rock = new Builder(), glowB = new Builder();
   const footprints = [], trees = [], bushes = [], lamps = [], grass = [], tops = [], beacons = [];
   const v = new THREE.Vector3();
   const world = (m, x, y, z) => v.set(x, y, z).applyMatrix4(m).clone();
+
+  /* ---------- 高楼的零件（精修） ---------- */
+  const FL = 3.5, RUST = C(0x6b4a36), RAIL = C(0x4e4640);
+  /** 从断口竖着戳出来的钢筋（base = 0 朝上，π 朝下） */
+  function rebar(m, base, RD) {
+    metal.box(0.12, RD.range(1, 3.6), 0.12, m.multiply(mat(0, 0, 0, 0, base + RD.range(-0.6, 0.6), RD.range(-0.6, 0.6))), RUST);
+  }
+  /** 从楼板边缘水平伸出、往下耷拉的钢筋。axis 是伸出的方向（'x' 或 'z'），s 是正负 */
+  function rebarOut(m, axis, s, RD) {
+    const t = Math.PI / 2 + RD.range(0.1, 0.9), len = RD.range(0.8, 2.6);
+    const r = axis === 'x' ? mat(0, 0, 0, RD.range(-0.3, 0.3), 0, -s * t) : mat(0, 0, 0, RD.range(-0.3, 0.3), s * t, 0);
+    metal.box(0.1, len, 0.1, m.multiply(r), RUST);
+  }
+  /** 撕开的楼角：每层楼板断在不同长度，边上伸出钢筋，偶尔有一块断板斜挂着 */
+  function tornCorner(T, L, Mt, w, d, tint, RD) {
+    const { a, b, sx, sz, cw, cd } = T, ix = sx * (w / 2 - cw), iz = sz * (d / 2 - cd);
+    const slabC = tint.clone().multiplyScalar(0.68), inner = tint.clone().multiplyScalar(0.45);
+    // 里面的隔墙和柱子（暗一些，像在阴影里）
+    plain.box(0.3, b - a, cd * RD.range(0.5, 0.95), L(ix + sx * cw * RD.range(0.15, 0.45), a, iz + sz * cd * 0.45), inner);
+    plain.box(0.8, b - a, 0.8, L(sx * (w / 2 - 0.6), a, sz * (d / 2 - 0.6)).multiply(mat(0, 0, 0, 0, RD.range(-0.03, 0.03), RD.range(-0.03, 0.03))), dark(tint));
+    for (let y = a + FL; y <= b + 0.01; y += FL) {
+      const isTop = y > b - 0.01;
+      for (let k = 0; k < 2; k++) {
+        const half = cd / 2, zc = iz + sz * cd * (0.25 + 0.5 * k), ext = isTop ? cw : cw * RD.range(0.25, 1);
+        if (!isTop) plain.box(ext, 0.35, half - 0.05, L(ix + sx * ext / 2, y - 0.35, zc), slabC, { moss: 0.3, mossTop: 1 });
+        else plain.box(cw, 0.35, half - 0.05, L(ix + sx * cw / 2, y - 0.35, zc), slabC); // 上面那段楼的底板
+        if (isTop) continue;
+        for (let r = 0; r < 3; r++) if (RD() < 0.75) rebarOut(L(ix + sx * ext, y - 0.18, zc + RD.range(-half / 2, half / 2)), 'x', sx, RD);
+        if (ext < cw * 0.7 && RD() < 0.35) { // 断下来的一截，斜挂在断口
+          const hl = RD.range(1.4, 3.2), tilt = RD.range(0.5, 1.3);
+          plain.box(hl, 0.3, half * 0.8, L(ix + sx * ext, y - 0.35, zc).multiply(mat(0, 0, 0, 0, 0, -sx * tilt)).multiply(mat(sx * hl / 2, 0, 0)), slabC);
+        }
+        if (RD() < 0.25) bushes.push([world(Mt, ix + sx * ext * 0.4, y, zc), RD.range(0.7, 1.4)]);
+      }
+      // 沿 z 方向的楼板边也伸出钢筋
+      for (let r = 0; r < 2; r++) if (!isTop && RD() < 0.6) rebarOut(L(ix + sx * cw * RD.range(0.1, 0.5), y - 0.18, sz * d / 2), 'z', sz, RD);
+    }
+    // 撕口下沿的碎块
+    for (let i = 0; i < 4; i++) { const s = RD.range(0.5, 1.4); plain.box(s * 1.5, s, s, L(ix + sx * cw * RD.range(0.1, 0.8), a, iz + sz * cd * RD.range(0.1, 0.9)).multiply(mat(0, 0, 0, RD() * 3, RD.range(-0.4, 0.4), RD.range(-0.4, 0.4))), slabC, { moss: 0.6, mossTop: 1 }); }
+  }
+  const dark = t => t.clone().multiplyScalar(0.72);
+  /** 某个高度、某段墙是不是被断层或撕口挖掉了 */
+  function gone(F, face, lx, lz, y0, y1) {
+    if (F.notch && y1 > F.notch[0] && y0 < F.notch[1]) return true;
+    const T = F.tear; if (!T || y1 <= T.a || y0 >= T.b) return false;
+    if (face === 'x') return Math.sign(lx) === T.sx && T.sz * lz > F.d / 2 - T.cd - 0.3;
+    return Math.sign(lz) === T.sz && T.sx * lx > F.w / 2 - T.cw - 0.3;
+  }
+  /** 竖向的构件（肋、壁柱）在断层和撕口处断开 */
+  function column(F, face, lx, lz, bw, bd, y0, y1, B, col) {
+    const cuts = [];
+    if (F.notch) cuts.push(F.notch);
+    if (F.tear && gone(F, face, lx, lz, F.tear.a, F.tear.b)) cuts.push([F.tear.a, F.tear.b]);
+    let y = y0;
+    for (const [a, b] of cuts.sort((p, q) => p[0] - q[0])) { if (a > y) B.box(bw, a - y, bd, F.L(lx, y, lz), col); y = Math.max(y, b); }
+    if (y1 > y) B.box(bw, y1 - y, bd, F.L(lx, y, lz), col);
+  }
+  /** 立面：办公楼的竖肋、住宅的阳台、粗野主义的遮阳板，以及所有楼的转角壁柱 */
+  function facade(sty, F) {
+    const { w, d, hMain, L, tint, TBs, RD } = F, tl = tint.clone().multiplyScalar(1.04);
+    const faces = [['z', 1], ['z', -1], ['x', 1], ['x', -1]];
+    if (sty !== 'grid') for (const cx of [-1, 1]) for (const cz of [-1, 1]) column(F, 'x', cx * (w / 2 - 0.3), cz * (d / 2 - 0.3), 1.1, 1.1, 0, hMain, TBs, tl);
+    if (sty === 'grid') for (const [ax, sgn] of faces) {
+      const span = ax === 'z' ? w : d, n = Math.max(2, Math.round(span / 4));
+      for (let i = 1; i < n; i++) {
+        const u = -span / 2 + span * i / n;
+        const lx = ax === 'z' ? u : sgn * (w / 2 + 0.3), lz = ax === 'z' ? sgn * (d / 2 + 0.3) : u;
+        column(F, ax, lx, lz, ax === 'z' ? 0.28 : 0.6, ax === 'z' ? 0.6 : 0.28, 0.6, hMain - 0.3, TBs, tl);
+      }
+    }
+    if (sty === 'brut') for (let y = 4.5; y < hMain - 2; y += 7) {
+      if (gone(F, 'x', 0, 0, y - 1, y + 1) || (F.tear && y > F.tear.a - 1 && y < F.tear.b + 1)) continue;
+      TBs.box(w + 2.2, 0.45, d + 2.2, L(0, y, 0), dark(tint).multiplyScalar(1.15), { moss: 0.4, mossTop: 1 });
+    }
+    if (sty === 'resi' && !LOW && F.mode !== 'sunk') {
+      const f0 = Math.floor(RD() * 4), use = [f0]; if (RD() < 0.55) use.push(f0 ^ 1);
+      const railMetal = RD() < 0.4, slabC = tint.clone().multiplyScalar(0.9), parC = railMetal ? RAIL : tl;
+      for (const fi of use) {
+        const [ax, sgn] = faces[fi], span = ax === 'z' ? w : d, n = Math.max(2, Math.floor(span / 4.4)), sp = span / n, bw = sp - 0.8;
+        for (let y = FL + 0.05; y < hMain - 2; y += FL) for (let i = 0; i < n; i++) {
+          const u = -span / 2 + sp * (i + 0.5);
+          const lx = ax === 'z' ? u : sgn * w / 2, lz = ax === 'z' ? sgn * d / 2 : u;
+          if (gone(F, ax, lx, lz, y - 0.5, y + 1.2) || RD() < 0.14) continue;
+          const hang = RD() < 0.05 ? RD.range(0.6, 1.3) : 0;
+          const m = L(lx, y, lz).multiply(ax === 'z' ? mat(0, 0, 0, 0, sgn * hang, 0) : mat(0, 0, 0, 0, 0, -sgn * hang));
+          const o = (ax === 'z') ? (dz => mat(0, 0, sgn * dz)) : (dx => mat(sgn * dx, 0, 0));
+          const [sw, sd] = ax === 'z' ? [bw, 1.2] : [1.2, bw];
+          detail.box(sw, 0.22, sd, m.clone().multiply(o(0.6)), slabC);
+          if (RD() < 0.92) detail.box(ax === 'z' ? bw : 0.12, 0.95, ax === 'z' ? 0.12 : bw, m.clone().multiply(o(1.14)).multiply(mat(0, 0.22, 0)), parC);
+          if (!hang && RD() < 0.08) bushes.push([world(F.Mt, lx + (ax === 'x' ? sgn * 0.6 : 0), y + 0.3, lz + (ax === 'z' ? sgn * 0.6 : 0)), RD.range(0.5, 0.9)]);
+        }
+      }
+    }
+  }
+  /** 楼顶：完好的那几块屋面有一圈残破的女儿墙、水箱和空调外机；高出来的残段顶上竖着几片断墙 */
+  function roofline(F) {
+    const { w, d, hMain, exts, qs, L, tint, TBs, RD, opt } = F;
+    qs.forEach(([qx, qz], k) => {
+      const ox = qx * w / 4, oz = qz * d / 4, ext = exts[k];
+      if (ext > 1) { // 残段顶上的断墙片
+        for (let i = 0; i < 2; i++) if (RD() < 0.6) {
+          const alongX = RD() < 0.5, fw = RD.range(1.5, Math.max(1.6, (alongX ? w : d) / 2 - 1)), fh = RD.range(1, 4.5);
+          const m = alongX ? L(ox + RD.range(-1, 1), hMain + ext, qz * (d / 2 - 0.45)) : L(qx * (w / 2 - 0.45), hMain + ext, oz + RD.range(-1, 1));
+          TBs.box(alongX ? fw : 0.4, fh, alongX ? 0.4 : fw, m.multiply(mat(0, 0, 0, 0, RD.range(-0.08, 0.08), RD.range(-0.1, 0.1))), tint, { ...opt, off: [opt.off[0], ((hMain + ext) / 14) % 1] });
+        }
+        return;
+      }
+      if (ext < 0 || F.mode === 'fallen') return;
+      // 女儿墙：沿两条外沿，一段段的，有缺口
+      for (const alongX of [true, false]) {
+        const len = (alongX ? w : d) / 2;
+        for (let s = 0; s < len - 0.5;) {
+          const sl = Math.min(RD.range(1.5, 5), len - s);
+          if (RD() < 0.72) {
+            const p = alongX ? [qx * (s + sl / 2), qz * (d / 2 - 0.2)] : [qx * (w / 2 - 0.2), qz * (s + sl / 2)];
+            TBs.box(alongX ? sl : 0.4, RD.range(0.6, 1.1), alongX ? 0.4 : sl, L(p[0], hMain, p[1]), tint);
+          }
+          s += sl;
+        }
+      }
+      if (LOW) return;
+      if (RD() < 0.4) { // 水箱
+        const px = ox + RD.range(-1.5, 1.5), pz = oz + RD.range(-1.5, 1.5), m = L(px, hMain, pz), tc = RD() < 0.5 ? C(0x8a7a64) : C(0x6e5a4a);
+        for (const [a, b] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) detail.box(0.18, 1.3, 0.18, m.clone().multiply(mat(a * 1.1, 0, b * 1.1)), RAIL);
+        detail.add(new THREE.CylinderGeometry(1.5, 1.5, 2.6, 10).translate(0, 2.6, 0), m, tc);
+        detail.add(new THREE.ConeGeometry(1.6, 0.6, 10).translate(0, 4.2, 0), m, tc);
+      }
+      for (let i = 0; i < 3; i++) if (RD() < 0.4) detail.box(1.1, 0.8, 0.7, L(ox + RD.range(-w / 5, w / 5), hMain, oz + RD.range(-d / 5, d / 5)).multiply(mat(0, 0, 0, RD() < 0.5 ? 0 : Math.PI / 2)), C(0x9a958a));
+      if (RD() < 0.12) { // 天线
+        const m = L(ox, hMain, oz); detail.box(0.25, RD.range(6, 12), 0.25, m.clone(), RAIL);
+        detail.box(2.4, 0.12, 0.12, m.clone().multiply(mat(0, 4, 0)), RAIL);
+      }
+    });
+  }
 
   /* ---------- 断裂高楼 ---------- */
   const CONC = [0xd8d2c4, 0xc9c3b5, 0xa9a69c, 0x9a978e, 0xb5aa96, 0x8f8a80, 0xc4b8a0, 0xbdb3a2].map(C);
@@ -125,30 +365,52 @@ export function buildCity(scene, M) {
     const Mt = mat(x, y0, z, yaw, rx, rz);
     const L = (lx, ly, lz) => Mt.clone().multiply(mat(lx, ly, lz));
     const tint = CONC[Math.floor(R() * CONC.length)].clone().multiplyScalar(R.range(0.86, 1.04));
-    const dark = tint.clone().multiplyScalar(0.72);
+    const dk = dark(tint);
     const opt = { tile: [16, 14], moss: mode === 'sunk' ? 0.2 : 0.55, mossTop: 1, off: [Math.floor(R() * 4) / 4, Math.floor(R() * 4) / 4] };
+    // 精修用的随机数单独一条流，按楼的位置播种：v1 的布局（R 的取数顺序）一点不变
+    const RD = rng(((Math.round(x * 13) * 73856093) ^ (Math.round(z * 17) * 19349663)) >>> 0 || 7);
+    const sty = mode === 'sunk' ? 'brut' : STYLES[Math.floor(RD() * 3)], TBs = TB[sty];
+    TBs.base = mode === 'sunk' ? 0 : y0 + 2; // 沉楼的「墙根污渍」落在水线上
+    const body = (bw, bh, bd, lx, ly, lz) => { if (bh > 0.05) TBs.box(bw, bh, bd, L(lx, ly, lz), tint, { ...opt, off: [opt.off[0], (ly / 14) % 1] }); };
     const hMain = h * R.range(0.58, 0.86);
-    let notch = null;
+    let notch = null, tear = null;
     if (R() < 0.42 && hMain > 34) { const a = hMain * R.range(0.25, 0.55); notch = [a, a + R.range(7, 15)]; }
+    // 楼角被撕开几层，露出一层层楼板和钢筋
+    if (!notch && hMain > 30 && RD() < (mode === 'sunk' ? 0.3 : 0.45)) {
+      const a = Math.max(FL * 2, Math.round(hMain * RD.range(0.2, 0.62) / FL) * FL);
+      const b = Math.min(a + FL * Math.floor(RD.range(3, 9)), Math.floor((hMain - 3) / FL) * FL);
+      if (b - a >= FL * 2) tear = { a, b, sx: RD() < 0.5 ? -1 : 1, sz: RD() < 0.5 ? -1 : 1, cw: w * RD.range(0.32, 0.55), cd: d * RD.range(0.32, 0.55) };
+    }
     if (notch) {
       const [a, b] = notch, side = R() < 0.5 ? -1 : 1, kw = w * R.range(0.4, 0.6);
-      tower.box(w, a, d, L(0, 0, 0), tint, opt);
-      tower.box(w - kw, b - a, d, L(side * kw / 2, a, 0), tint, opt);
-      for (let i = 0; i < 4; i++) plain.box(0.7, b - a, 0.7, L(-side * (w / 2 - kw * (i + 0.5) / 4) * 0.98, a, R.range(-d / 2, d / 2) * 0.9), dark);
-      for (let i = 0; i < 3; i++) plain.box(kw, 0.45, d * R.range(0.3, 0.9), L(-side * (w / 2 - kw / 2), a + (b - a) * (i + 1) / 4, 0), dark);
-      tower.box(w, hMain - b, d, L(0, b, 0), tint, opt);
+      body(w, a, d, 0, 0, 0);
+      body(w - kw, b - a, d, side * kw / 2, a, 0);
+      for (let i = 0; i < 4; i++) plain.box(0.7, b - a, 0.7, L(-side * (w / 2 - kw * (i + 0.5) / 4) * 0.98, a, R.range(-d / 2, d / 2) * 0.9), dk);
+      for (let i = 0; i < 3; i++) plain.box(kw, 0.45, d * R.range(0.3, 0.9), L(-side * (w / 2 - kw / 2), a + (b - a) * (i + 1) / 4, 0), dk);
+      body(w, hMain - b, d, 0, b, 0);
       bushes.push([world(Mt, -side * (w / 2 - kw / 2), a + 0.4, 0), R.range(1.2, 2.4)]);
-    } else tower.box(w, hMain, d, L(0, 0, 0), tint, opt);
+      // 断层上下的楼板断口挂着钢筋
+      for (const yy of [a, b]) for (let i = 0; i < 6; i++) rebar(L(-side * (w / 2 - kw * RD()), yy, RD.range(-d / 2, d / 2) * 0.9), yy === a ? 0 : Math.PI, RD);
+    } else if (tear) {
+      const { a, b, sx, cw } = tear;
+      body(w, a, d, 0, 0, 0);
+      body(w - cw, b - a, d, -sx * cw / 2, a, 0);
+      body(cw, b - a, d - tear.cd, sx * (w / 2 - cw / 2), a, -tear.sz * tear.cd / 2);
+      body(w, hMain - b, d, 0, b, 0);
+      tornCorner(tear, L, Mt, w, d, tint, RD);
+    } else body(w, hMain, d, 0, 0, 0);
+    facade(sty, { w, d, hMain, notch, tear, L, Mt, tint, TBs, RD, mode });
     // 楼层腰线
-    for (let y = 11; y < hMain - 3; y += 14) if (!notch || y < notch[0] || y > notch[1]) plain.box(w + 0.7, 0.55, d + 0.7, L(0, y, 0), dark, { moss: 0.3, mossTop: 0.9 });
+    for (let y = 11; y < hMain - 3; y += 14) if (!notch || y < notch[0] || y > notch[1]) plain.box(w + 0.7, 0.55, d + 0.7, L(0, y, 0), dk, { moss: 0.3, mossTop: 0.9 });
     // 参差的残顶：四个象限各自断在不同高度
-    const qs = [[-1, -1], [1, -1], [-1, 1], [1, 1]];
+    const qs = [[-1, -1], [1, -1], [-1, 1], [1, 1]], exts = [];
     for (const [qx, qz] of qs) {
-      if (R() < 0.22) { bushes.push([world(Mt, qx * w / 4, hMain + 0.4, qz * d / 4), R.range(1.5, 3)]); continue; }
+      if (R() < 0.22) { exts.push(-1); bushes.push([world(Mt, qx * w / 4, hMain + 0.4, qz * d / 4), R.range(1.5, 3)]); continue; }
       const ext = R() * (h - hMain), ox = qx * w / 4, oz = qz * d / 4;
-      if (ext > 1) tower.box(w / 2 - 0.25, ext, d / 2 - 0.25, L(ox, hMain, oz), tint, opt);
+      exts.push(ext);
+      if (ext > 1) body(w / 2 - 0.25, ext, d / 2 - 0.25, ox, hMain, oz);
       const top = hMain + ext;
-      if (R() < 0.6) plain.box(w / 2 + R.range(0, 3), 0.5, d / 2 * R.range(0.5, 1.1), L(ox + qx * R.range(0, 1.5), top - R.range(0, 3), oz), dark);
+      if (R() < 0.6) plain.box(w / 2 + R.range(0, 3), 0.5, d / 2 * R.range(0.5, 1.1), L(ox + qx * R.range(0, 1.5), top - R.range(0, 3), oz), dk);
       for (let i = 0; i < 3; i++) if (R() < 0.6) { // 钢筋
         const rb = mat(0, 0, 0, 0, R.range(-0.5, 0.5), R.range(-0.5, 0.5));
         metal.box(0.18, R.range(1.5, 5), 0.18, L(ox + R.range(-w / 4, w / 4), top, oz + R.range(-d / 4, d / 4)).multiply(rb), C(0x6b4a36));
@@ -156,12 +418,21 @@ export function buildCity(scene, M) {
       if (R() < 0.7) bushes.push([world(Mt, ox + R.range(-1, 1), top + 0.3, oz), R.range(1, 2.6)]);
       if (R() < 0.3 && mode !== 'fallen') trees.push([world(Mt, ox, top, oz), R.range(0.5, 0.9), 'oak']);
     }
+    roofline({ w, d, hMain, exts, qs, L, Mt, tint, TBs, RD, opt, mode });
     // 垂落的藤蔓
     const nv = mode === 'sunk' ? 2 : Math.floor(R.range(3, 9));
     for (let i = 0; i < nv; i++) {
       const f = Math.floor(R() * 4), t = R.range(-0.45, 0.45), len = R.range(5, hMain * 0.65), vw = R.range(1, 3.2);
-      const top = hMain - 0.2, px = f < 2 ? (f ? 1 : -1) * (w / 2 + 0.2) : t * w, pz = f >= 2 ? (f === 3 ? 1 : -1) * (d / 2 + 0.2) : t * d;
-      leaf.box(f < 2 ? 0.35 : vw, len, f < 2 ? vw : 0.35, L(px, top - len, pz), C(R() < 0.5 ? 0x4e6b34 : 0x63803d));
+      const off = sty === 'grid' ? 0.75 : 0.2, top = hMain - 0.2, px = f < 2 ? (f ? 1 : -1) * (w / 2 + off) : t * w, pz = f >= 2 ? (f === 3 ? 1 : -1) * (d / 2 + off) : t * d;
+      const vc = C(R() < 0.5 ? 0x4e6b34 : 0x63803d);
+      // 一帘藤蔓：顶上一团厚的，下面是长短不一的几股
+      leaf.box(f < 2 ? 0.5 : vw + 0.6, Math.min(len, RD.range(1.5, 3.5)), f < 2 ? vw + 0.6 : 0.5, L(px, top - Math.min(len, 2.5), pz), vc.clone().multiplyScalar(0.85));
+      const ns = Math.max(2, Math.round(vw / 0.55));
+      for (let k = 0; k < ns; k++) {
+        const u = (k + 0.5) / ns - 0.5, sl = len * RD.range(0.3, 1), sw = RD.range(0.22, 0.5), sc = vc.clone().multiplyScalar(RD.range(0.75, 1.1));
+        const sx = f < 2 ? px : px + u * vw, sz = f < 2 ? pz + u * vw : pz;
+        leaf.box(f < 2 ? 0.3 : sw, sl, f < 2 ? sw : 0.3, L(sx, top - sl, sz), sc);
+      }
     }
     // 楼下的碎块
     if (mode !== 'sunk') for (let i = 0; i < 8; i++) {
@@ -443,7 +714,7 @@ export function buildCity(scene, M) {
   });
   function island(cx, cy, cz, r, opts = {}) {
     const g = new THREE.Group(); g.position.set(cx, cy, cz);
-    const RB = new Builder(), LB = new Builder(), SB = new Builder();
+    const RB = new Builder(), LB = new Builder(), SB = new WBuilder(); SB.base = -1000;
     const hgt = r * R.range(1.3, 1.9), cone = new THREE.ConeGeometry(r, hgt, 14, 7); cone.rotateX(Math.PI); cone.translate(0, -hgt / 2, 0);
     const p = cone.attributes.position;
     for (let i = 0; i < p.count; i++) {
@@ -516,7 +787,9 @@ export function buildCity(scene, M) {
 
   /* ---------- 组装 ---------- */
   const add = (b, m, o) => { const mesh = b.build(m, o); if (mesh) scene.add(mesh); return mesh; };
-  add(tower, M.tower); add(house, M.house); add(plain, M.plain); add(leaf, M.leaf); add(metal, M.metal); add(rock, M.rock);
+  add(TB.grid, M.tower); add(TB.resi, M.towerResi); add(TB.brut, M.towerBrut);
+  const detailMesh = add(detail, M.plain);
+  add(house, M.house); add(plain, M.plain); add(leaf, M.leaf); add(metal, M.metal); add(rock, M.rock);
   add(glowB, M.glow, { cast: false, receive: false });
 
   // 树（实例化；浮空岛上的树挂到岛的组里）
@@ -561,7 +834,7 @@ export function buildCity(scene, M) {
 
   const lampCol = new THREE.Color();
   return {
-    footprints, tram: TRAM, highway: HIGHWAY, lighthouse: LH, islands, stations, tops, mast: MAST,
+    footprints, detail: detailMesh, tram: TRAM, highway: HIGHWAY, lighthouse: LH, islands, stations, tops, mast: MAST,
     update(t, env) {
       const L = clamp(env.lamp, 0, 1);
       U.uTime.value = t; U.uLamp.value = L * 1.02;

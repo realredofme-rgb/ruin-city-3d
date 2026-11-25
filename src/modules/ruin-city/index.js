@@ -20,7 +20,7 @@ export default {
     const life = buildLife(root, city);
     for (const o of root.children) if (!before.has(o)) o.userData.dynamic = true; // 车、船、飞艇、落石……一开始都在原点，之后才动
     const motes = makeMotes(); root.add(motes);
-    const wetMats = [terrain.material, M.tower, M.plain, M.house, M.metal];
+    const wetMats = [terrain.material, M.tower, M.towerResi, M.towerBrut, M.plain, M.house, M.metal];
     M.house.userData.wetK = 0.6;
     for (const m of wetMats) { m.userData.r0 = m.roughness; }
     // 从太空看得见的夜灯：坡上人家、码头、废墟楼顶的障碍灯
@@ -40,6 +40,8 @@ export default {
       },
       update(dt, t, env, camLocal, speed = 1) {
         city.update(t, env);
+        // 阳台、水箱这些小零件只在近处画（城市核心区约 1.3 公里宽）
+        if (city.detail) city.detail.visible = camLocal.position.length() < 2600;
         U.uWind.value = env.wind;
         life.update(dt, t, env, speed, camLocal);
         motes.material.uniforms.uTime.value = t; motes.material.uniforms.uNight.value = env.night;
