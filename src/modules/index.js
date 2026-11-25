@@ -13,7 +13,7 @@ import m3 from './sunken-wetland/index.js';
 
 import { isles as m4 } from './placeholders.js';
 
-import { volcano as m5 } from './placeholders.js';
+import m5 from './volcano-forge/index.js';
 
 import m6 from './ice-wreck/index.js';
 
