@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { fbm, smooth, clamp, lerp } from '../../util.js';
 import { mirrorGeometry } from './kit.js';
 import { makeLake } from './lake.js';
+import { TOURS } from './tours.js';
 import { makeKits, tintStone, buildColonnade, buildRing, buildArray, buildCacti, buildPiles, buildYard, along, ISLE, RING_T } from './structures.js';
 
 const L = 12;                                       // 湖面海拔
@@ -115,7 +116,7 @@ function glowMaterial(U, blink) {
 export default {
   id: 'salt-mirror', no: 7, name: '盐湖镜原', sub: '一层薄水把天空整个倒映下来', status: 'built', want: [12, -72],
   note: '雨季的盐湖上积着几厘米的水，天和地连成一片。一条巨石列柱大道横穿湖面，尽头是半没在水里的巨环；东北角的射电天线阵仍然齐齐望着同一片天，湖心岛上长满了仙人掌。',
-  core: CORE,
+  core: CORE, tours: TOURS,
   route: { x: 0, z: 0, alt: 320 },
   home: { cam: [-700, 26, -330], target: [200, 60, 40] },
   height,
