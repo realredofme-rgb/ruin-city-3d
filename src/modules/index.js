@@ -9,7 +9,7 @@ import m1 from './ruin-city/index.js';
 
 import { rift as m2 } from './placeholders.js';
 
-import { wetland as m3 } from './placeholders.js';
+import m3 from './sunken-wetland/index.js';
 
 import { isles as m4 } from './placeholders.js';
 
