@@ -1,6 +1,17 @@
 # 模块接口
 
-回声星由 42 块地拼成（二频细分二十面体的对偶：12 块五边形 + 30 块六边形）。7 块分给模块，其余是海洋、荒原和极地。每个模块是一个普通的 JS 对象，放在 `src/modules/` 下，并在 `src/modules/index.js` 里登记。
+回声星由 42 块地拼成（二频细分二十面体的对偶：12 块五边形 + 30 块六边形）。7 块分给模块，其余是海洋、荒原和极地。每个模块是一个普通的 JS 对象，放在 `src/modules/<id>/index.js`（默认导出）。
+
+## 登记
+
+`src/modules/index.js` 里每个槽位一行，没建好的槽位从 `placeholders.js` 取占位。模块建好后只改自己那一行：
+
+```js
+import { ice as m6 } from './placeholders.js';   // 改成 ↓
+import m6 from './ice-wreck/index.js';
+```
+
+别的行、`MODULES`、`ROUTE` 和 `placeholders.js` 都不要动。几个模块同时开工时，各自只动一行，git 能自动合并。`id` 和 `no` 必须和占位一致，槽位对不上会在加载时直接报错。
 
 ## 尺度与坐标
 
@@ -31,13 +42,13 @@
 | `glow(x, z)` | 0–1 的自发光强度（火山熔岩用） |
 | `core` | `{ x0, x1, z0, z1 }`：模块自带精细地形网格的范围。星球网格在这个矩形里往下藏 30 米，避免互相穿插；离核心区 1.65 公里以内海岸线不会被噪声推进来 |
 | `home` | `{ cam: [x,y,z], target: [x,y,z] }`：点「前往」时的落点镜头 |
-| `tours` | 风景巡游清单（格式见 `ruin-city/tours.js`） |
+| `tours` | 风景巡游清单（格式见 `ruin-city/tours.js`）。会出现在控制台的「风景」列表里，开始时按这块地设当地时间（`hour`）和天气（`weather`） |
 
 ## build() 的返回值
 
 都可以省略：
 
-- `update(dt, t, env, camLocal, speed)`：每帧调用。`env` 是这块地上空的本地环境（`hour`、`night`、`lamp`、`wx`、`wind`、`wet`、`weather`），由全球统一的时钟和漂移的天气云团算出来；`camLocal` 是镜头在模块平面坐标里的位置。
+- `update(dt, t, env, camLocal, speed)`：每帧调用。`env` 是这块地上空的本地环境（`hour`、`night`、`lamp`、`wx`、`wind`、`wet`、`weather`），由全球统一的时钟和漂移的天气云团算出来；`camLocal` 是镜头在模块平面坐标里的代理（`Object3D`，位置和朝向都已换到平面坐标），每个模块都有。
 - `lights`：`[x, y, z, 强度]` 数组，从太空看夜面时显示的灯点。
 - `rides`、`ground`、`canStand`、`walkStart`：搭乘与街道漫游用（参考 `ruin-city/index.js`）。
 
@@ -48,7 +59,7 @@
 - 变换为单位矩阵的网格：顶点直接烘焙到球面上（地形、道路这类大面积的东西）。
 - 有位置的物体：当作刚体，整体放到球面对应位置并贴着当地的「上」方向。之后改 `position` / `rotation` 仍然有效，`lookAt` 也按平面坐标工作。
 - 一开始在原点、之后才动的物体（车、船）：给它 `userData.dynamic = true`，让它走刚体路线。
-- `InstancedMesh`：照常 `setMatrixAt`，挂载层会记下平面矩阵并在需要时重新弯曲。
+- `InstancedMesh`：照常用平面坐标 `setMatrixAt`，挂载层会弯到球面上。`getMatrixAt` 返回的是**球面上**的矩阵（和 three.js 原意一致，包围球、视锥裁剪、点击拾取都靠它）；要读回自己写进去的平面矩阵用 `getFlatMatrixAt`。InstancedMesh 自身的位置旋转在挂载时并进各实例，之后再改它自身的变换不生效，要动就改实例矩阵。不用关掉 `frustumCulled`。
 - `Points` 和 `ShaderMaterial`：在顶点着色器里弯曲。
 
 光照、雾、天空、海面、云和雨都由星球统一负责，模块不要自己加平行光、天空盒或海面。

@@ -123,7 +123,7 @@ export class GlobeRig {
     this.tour = tour; this.tmod = mod; this.tt = 0;
     if (tour.planet) { this.setMode('tour'); this.tf = this.s.f.clone(); return; }
     this.tp = new THREE.CatmullRomCurve3(tour.keys.map(k => k[0]), true, 'centripetal'); this.tg = new THREE.CatmullRomCurve3(tour.keys.map(k => k[1]), true, 'centripetal');
-    this.lookNow = mod.frame.toWorld(...this.tg.getPointAt(0).toArray());
+    this.lookNow = mod.frame.toWorld(...this.tg.getPointAt(0).toArray()); this.tjump = true;
     this.setMode('tour');
   }
   startRide(kind, obj) { this.ride = kind; this.rideObj = obj; this.rideLook = null; this.setMode('ride'); }
@@ -179,7 +179,7 @@ export class GlobeRig {
       const p = this.tp.getPointAt(u), t = this.tg.getPointAt(u);
       p.y = Math.max(p.y, this.tmod.height(p.x, p.z) + 6);
       const pw = F.toWorld(p.x, p.y, p.z), tw = F.toWorld(t.x, t.y, t.z);
-      if (this.tt < 0.05) cam.position.copy(pw); else cam.position.lerp(pw, 1 - Math.exp(-dt * 3));
+      if (this.tjump) { cam.position.copy(pw); this.lookNow.copy(tw); this.tjump = false; } else cam.position.lerp(pw, 1 - Math.exp(-dt * 3)); // 第一帧直接切到路线上，不从太空慢慢滑过去
       this.lookNow.lerp(tw, 1 - Math.exp(-dt * 2));
       cam.up.copy(cam.position).normalize(); cam.lookAt(this.lookNow);
     } else if (this.mode === 'ride') {
