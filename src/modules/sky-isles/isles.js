@@ -4,6 +4,13 @@ import * as THREE from 'three';
 import { smooth, clamp, lerp, rng } from '../../util.js';
 import { nz, strata } from './terrain.js';
 import { Pack, at, pineGeo, oakGeo } from './geo.js';
+import { floraLod, LOW_Q } from '../../models.js';
+
+/** 浮岛和台地上的树：近处换成城市那批 GLB 树（松树两种、阔叶树三种），远处保留程序化低模 */
+export const TREE_GLB = { pine: ['ruin-city/tree-pine-1', 'ruin-city/tree-pine-2'], oak: [1, 2, 3].map(k => `ruin-city/tree-oak-${k}`) };
+export const FLORA_Q = LOW_Q ? { near: 0, mid: 140 } : { near: 70, mid: 280 };
+/** GLB 自带贴图颜色，只按占位颜色的明暗轻轻染一下 */
+export const glbTint = (c, lo, hi) => { const h = {}; c.getHSL(h); return new THREE.Color().setScalar(0.82 + clamp((h.l - lo) / (hi - lo), 0, 1) * 0.3); };
 
 const C = c => new THREE.Color(c);
 const GRASS = C(0x6f8f45), GRASS2 = C(0x9aa35e), SOIL = C(0x5b4636), ROCK = C(0x6d6358), ROCK2 = C(0x4a443e), MOSS = C(0x55703c);
@@ -161,11 +168,12 @@ export function makeIsland(spec, mats, shared) {
     if (nz(x * 0.02 + spec.seed, z * 0.02, 2) < -0.5 && R() < 0.7) continue; // 林间空地
     trees[R() < 0.6 ? 'pine' : 'oak'].push([x, topY(x, z) - 0.3, z, R.range(0.7, 1.5) * (r > 150 ? 1.2 : 1)]);
   }
+  const flora = [];
   for (const k of ['pine', 'oak']) {
     const list = trees[k]; if (!list.length) continue;
-    const im = new THREE.InstancedMesh(shared[k], mats.tree, list.length), d = new THREE.Object3D();
-    list.forEach(([x, y, z, s], i) => { d.position.set(x, y, z); d.rotation.set(R.range(-0.08, 0.08), R() * 6.28, R.range(-0.08, 0.08)); d.scale.set(s, s * R.range(0.85, 1.25), s); d.updateMatrix(); im.setMatrixAt(i, d.matrix); im.setColorAt(i, _c.setHSL(0.24 + R.range(-0.04, 0.05), 0.3, R.range(0.42, 0.6)).multiplyScalar(1.8)); });
-    im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); g.add(im);
+    const d = new THREE.Object3D();
+    const items = list.map(([x, y, z, s]) => { d.position.set(x, y, z); d.rotation.set(R.range(-0.08, 0.08), R() * 6.28, R.range(-0.08, 0.08)); d.scale.set(s, s * R.range(0.85, 1.25), s); d.updateMatrix(); const c = _c.setHSL(0.24 + R.range(-0.04, 0.05), 0.3, R.range(0.42, 0.6)); return { m: d.matrix.clone(), c: c.clone().multiplyScalar(1.8), g: glbTint(c, 0.42, 0.6) }; });
+    flora.push(floraLod(g, items, { geometry: shared[k], material: mats.tree }, TREE_GLB[k], FLORA_Q));
   }
   // 晶簇：嵌在岩根上
   const crystals = [];
@@ -180,7 +188,7 @@ export function makeIsland(spec, mats, shared) {
   // 瀑布出口：岛边上的几个点（朝外的方位角）
   const fallSpots = (spec.falls || []).map(a => ({ a, x: Math.cos(a) * rho(a) * 0.985, z: Math.sin(a) * rho(a) * 0.985, w: Math.max(4, r * 0.09) }));
   g.userData = { base: spec.y, ph: R() * 6.28, amp: spec.amp ?? 2.5, sway: spec.sway ?? 0.004 };
-  return { g, rho, topY, r, spec, crystals, fallSpots };
+  return { g, rho, topY, r, spec, crystals, fallSpots, flora };
 }
 
 export const SHARED = () => ({ pine: pineGeo(), oak: oakGeo() });

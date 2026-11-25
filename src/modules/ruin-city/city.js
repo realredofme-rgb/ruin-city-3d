@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { Builder, mat, rng, fbm, smooth, clamp, lerp } from '../../util.js';
 import { ground, shoreZ } from './terrain.js';
-import { upgradeInstanced, loadModel } from '../../models.js';
+import { upgradeInstanced, loadModel, floraLod } from '../../models.js';
 
 /* ---------- 区域划分 ---------- */
 export const RUIN_C = new THREE.Vector2(-190, -130);
@@ -260,8 +260,13 @@ function litMat(m) {
 }
 /* 树、灌木、草丛随风摆动（越高摆得越多，每棵相位不同） */
 function swayMat() {
-  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: true });
-  m.onBeforeCompile = sh => {
+  return addSway(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: true }));
+}
+/** 风吹摇摆：越高摆得越大，每棵树的相位按位置错开（程序化的树和 GLB 的树共用） */
+function addSway(m) {
+  const prev = m.onBeforeCompile, key = m.customProgramCacheKey.bind(m);
+  m.onBeforeCompile = (sh, r) => {
+    if (prev) prev.call(m, sh, r);
     sh.uniforms.uTime = U.uTime; sh.uniforms.uWind = U.uWind;
     sh.vertexShader = 'uniform float uTime, uWind;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
       #ifdef USE_INSTANCING
@@ -274,7 +279,14 @@ function swayMat() {
       transformed.x += (sin(ph) * .7 + sin(ph * 2.7) * .25) * uWind * sw;
       transformed.z += cos(ph * .8) * .45 * uWind * sw;`);
   };
+  m.customProgramCacheKey = () => key() + '|sway';
   return m;
+}
+/** GLB 的材质克隆一份再加摇摆（同一个材质只加工一次） */
+const swayed = new Map();
+function swayGLB(m) {
+  if (!swayed.has(m)) { const c = m.clone(); c.onBeforeCompile = m.onBeforeCompile; c.customProgramCacheKey = m.customProgramCacheKey; swayed.set(m, addSway(c)); }
+  return swayed.get(m);
 }
 
 /* ---------- 树与灌木的单体几何 ---------- */
@@ -987,19 +999,33 @@ export function buildCity(scene, M) {
   add(house, M.house); add(roofB, M.roof); add(plain, M.plain); add(leaf, M.leaf); add(metal, M.metal); add(rock, M.rock);
   add(glowB, M.glow, { cast: false, receive: false });
 
-  // 树（实例化；浮空岛上的树挂到岛的组里）
+  // 树和灌木（实例化）：近处换成 GLB（LOD0 / LOD1），远处保留程序化的低模；浮空岛上的几棵树挂在岛的组里，仍用低模
   const tg = { oak: treeGeo('oak'), pine: treeGeo('pine') }, dummy = new THREE.Object3D(), tc = new THREE.Color();
+  // GLB 自带贴图颜色，只按占位颜色的明暗轻轻染一下
+  const glbTint = (c, lo, hi) => { const h = {}; c.getHSL(h); return new THREE.Color().setScalar(0.82 + clamp((h.l - lo) / (hi - lo), 0, 1) * 0.3); };
+  const FLORA = LOW ? { near: 0, mid: 140 } : { near: 70, mid: 280 };
+  const flora = [];
   for (const kind of ['oak', 'pine']) {
     const list = trees.filter(t => t[2] === kind && !t[3]);
-    const im = new THREE.InstancedMesh(tg[kind], M.tree, list.length);
-    list.forEach((t, i) => { dummy.position.copy(t[0]); dummy.rotation.set(0, R() * 6.28, 0); dummy.scale.setScalar(t[1]); dummy.updateMatrix(); im.setMatrixAt(i, dummy.matrix); im.setColorAt(i, tc.setHSL(0.22 + R.range(-0.04, 0.05), 0.35, R.range(0.42, 0.6)).multiplyScalar(1.9)); });
-    im.userData.flora = true; im.castShadow = true; im.receiveShadow = true; im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; im.computeBoundingSphere(); scene.add(im);
+    const items = list.map(t => {
+      dummy.position.copy(t[0]); dummy.rotation.set(0, R() * 6.28, 0); dummy.scale.setScalar(t[1]); dummy.updateMatrix();
+      const c = tc.setHSL(0.22 + R.range(-0.04, 0.05), 0.35, R.range(0.42, 0.6)).clone(), g = glbTint(c, 0.42, 0.6);
+      return { m: dummy.matrix.clone(), c: c.multiplyScalar(kind === 'pine' ? 1.45 : 1.9), g }; // 远处的低模松树压暗一点，和近处 GLB 松树的深绿接得上
+    });
+    const variants = kind === 'oak' ? [1, 2, 3].map(k => `ruin-city/tree-oak-${k}`) : [1, 2].map(k => `ruin-city/tree-pine-${k}`);
+    flora.push(floraLod(scene, items, { geometry: tg[kind], material: M.tree }, variants, { ...FLORA, prep: swayGLB, flags: { flora: true } }));
   }
   for (const t of trees.filter(t => t[3])) { const m = new THREE.Mesh(tg.oak, M.tree); m.position.copy(t[4]); m.scale.setScalar(t[1]); m.castShadow = true; t[3].add(m); }
-  {
-    const im = new THREE.InstancedMesh(bushGeo(), M.tree, bushes.length);
-    bushes.forEach(([p, s], i) => { dummy.position.copy(p); dummy.rotation.set(R(), R() * 6, R()); dummy.scale.set(s * R.range(1, 1.6), s * R.range(0.6, 1), s * R.range(1, 1.6)); dummy.updateMatrix(); im.setMatrixAt(i, dummy.matrix); im.setColorAt(i, tc.setHSL(0.23 + R.range(-0.05, 0.04), 0.4, R.range(0.38, 0.55)).multiplyScalar(1.6)); });
-    im.userData.flora = true; im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); scene.add(im);
+  if (bushes.length) {
+    const items = bushes.map(([p, s]) => {
+      // 立着长，只轻微歪一点（GLB 灌木有明确的上下）；占位是个以 p 为中心的球，GLB 的根在底面，往下埋一点
+      dummy.position.copy(p); dummy.rotation.set((R() - 0.5) * 0.3, R() * 6, (R() - 0.5) * 0.3); dummy.scale.set(s * R.range(1, 1.6), s * R.range(0.6, 1), s * R.range(1, 1.6)); dummy.updateMatrix();
+      const m = dummy.matrix.clone(), mg = m.clone().multiply(new THREE.Matrix4().makeTranslation(0, -0.3, 0)).multiply(new THREE.Matrix4().makeScale(1, 1.4, 1)); // GLB 灌木偏扁，拉高一点
+      const c = tc.setHSL(0.23 + R.range(-0.05, 0.04), 0.4, R.range(0.38, 0.55)).clone(), g = glbTint(c, 0.38, 0.55);
+      return { m, mg, c: c.multiplyScalar(1.6), g };
+    });
+    const near = FLORA.near && 45, mid = FLORA.mid * 0.6;
+    flora.push(floraLod(scene, items, { geometry: bushGeo(), material: M.tree }, ['ruin-city/shrub-1', 'ruin-city/shrub-2'], { near, mid, prep: swayGLB, flags: { flora: true } }));
   }
   {
     const im = new THREE.InstancedMesh(grassGeo(), M.tree, grass.length);
@@ -1031,7 +1057,7 @@ export function buildCity(scene, M) {
   return {
     footprints, detail: detailMesh, tram: TRAM, highway: HIGHWAY, lighthouse: LH, islands, stations, tops, mast: MAST,
     /** 按镜头远近给废车分 LOD（模块 update 里调用，cam 是平面坐标里的镜头） */
-    lod(cam, t) { if (carLod) carLod(cam, t); },
+    lod(cam, t) { if (carLod) carLod(cam, t); for (const f of flora) f.update(cam.position); },
     update(t, env) {
       const L = clamp(env.lamp, 0, 1);
       U.uTime.value = t; U.uLamp.value = L * 1.02;
