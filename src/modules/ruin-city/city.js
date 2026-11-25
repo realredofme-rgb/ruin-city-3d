@@ -24,6 +24,24 @@ export const HIGHWAY = new THREE.CatmullRomCurve3([
 ].map(p => new THREE.Vector3(p[0], p[1], p[2])));
 const HW_GAPS = [[0.205, 0.235], [0.47, 0.5], [0.66, 0.672]];
 
+/* 电车线（沿海岸，离岸 30 米）。先算出它在地面上的走向，摆楼时给它让路 */
+const TRAM_XZ = (() => {
+  const tp = []; for (let x = -470; x <= 610; x += 30) tp.push(new THREE.Vector3(x, 0, shoreZ(x) - 30));
+  const c = new THREE.CatmullRomCurve3(tp), xs = [], zs = [];
+  for (let i = 0; i <= 2000; i++) { const p = c.getPointAt(i / 2000); xs.push(p.x); zs.push(p.z); }
+  return { xs, zs };
+})();
+/** 离电车线的大致距离（米）。线路自西向东单调，按 x 插值出线上的 z */
+export function tramDist(x, z) {
+  const { xs, zs } = TRAM_XZ;
+  if (x < xs[0] - 5 || x > xs[xs.length - 1] + 5) return 1e9;
+  let lo = 0, hi = xs.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (xs[m] < x) lo = m; else hi = m; }
+  const t = clamp((x - xs[lo]) / Math.max(xs[hi] - xs[lo], 1e-6), 0, 1), zt = lerp(zs[lo], zs[hi], t);
+  const slope = (zs[hi] - zs[lo]) / Math.max(xs[hi] - xs[lo], 1e-6);
+  return Math.abs(z - zt) / Math.sqrt(1 + slope * slope);
+}
+
 function distToCurve(curve, x, z, n = 140) {
   let best = 1e9;
   for (let i = 0; i <= n; i++) { const p = curve.getPointAt(i / n); best = Math.min(best, Math.hypot(p.x - x, p.z - z)); }
@@ -529,19 +547,20 @@ export function buildCity(scene, M) {
     const lots = R() < 0.45 ? [[0, 0, R.range(22, 32), R.range(20, 30)]] : [[-9.5, 0, R.range(14, 17), R.range(18, 30)], [9.5, R.range(-4, 4), R.range(13, 17), R.range(16, 28)]];
     for (const [lx, lz, w, d] of lots) {
       const x = cx + lx * ca, z = cz + lx * sa + lz;
-      if (hwBlock(x, z, Math.max(w, d) / 2)) { if (R() < 0.6) trees.push([new THREE.Vector3(x, ground(x, z), z), R.range(0.8, 1.3), 'oak']); continue; }
+      if (hwBlock(x, z, Math.max(w, d) / 2) || tramDist(x, z) < Math.max(w, d) * 0.75 + 5) { if (R() < 0.6) trees.push([new THREE.Vector3(x, ground(x, z), z), R.range(0.8, 1.3), 'oak']); continue; }
       if (R() < 0.07) { // 空地：长满树
         for (let i = 0; i < 6; i++) { const tx = x + R.range(-12, 12), tz = z + R.range(-12, 12); trees.push([new THREE.Vector3(tx, ground(tx, tz), tz), R.range(0.8, 1.5), 'oak']); }
         continue;
       }
-      const r = R(), mode = r < 0.05 ? 'fallen' : r < 0.2 ? 'lean' : 'stand';
+      const r = R(); let mode = r < 0.05 ? 'fallen' : r < 0.2 ? 'lean' : 'stand';
+      if (mode === 'fallen' && tramDist(x, z) < 85) mode = 'lean'; // 倒下的楼别横在电车道上
       ruinTower(x, z, w, d, H * R.range(0.7, 1.15), ang + R.range(-0.04, 0.04), mode);
     }
   }
   // 街道上的树、灌木和废弃车辆
   for (let i = 0; i < 16000; i++) {
     const x = R.range(-600, 240), z = R.range(-360, 170);
-    if (ruinMask(x, z) < 0.5 || insideFoot(footprints, x, z, 1.5)) continue;
+    if (ruinMask(x, z) < 0.5 || insideFoot(footprints, x, z, 1.5) || tramDist(x, z) < 4.5) continue;
     const y = ground(x, z);
     if (i > 5000) { if (fbm(x * 0.04, z * 0.04, 2) > 0.42) grass.push([new THREE.Vector3(x, y - 0.1, z), R.range(0.8, 1.8)]); continue; }
     if (insideFoot(footprints, x, z, 3)) continue;
@@ -620,7 +639,7 @@ export function buildCity(scene, M) {
   function townHouse(x, z, w, d, h, yaw) {
     const gy = Math.min(ground(x - w / 2, z - d / 2), ground(x + w / 2, z + d / 2), ground(x + w / 2, z - d / 2), ground(x - w / 2, z + d / 2));
     const gyMax = Math.max(ground(x - w / 2, z - d / 2), ground(x + w / 2, z + d / 2), ground(x, z));
-    if (gyMax - gy > 7 || distToCurve(HIGHWAY, x, z, 90) < 13) return false;
+    if (gyMax - gy > 7 || distToCurve(HIGHWAY, x, z, 90) < 13 || tramDist(x, z) < Math.max(w, d) * 0.75 + 3) return false;
     const y0 = gy - 0.5, m = mat(x, y0, z, yaw), top = gyMax + h;
     const wall = WALL[Math.floor(R() * WALL.length)].clone().multiplyScalar(R.range(0.9, 1.03));
     const lit = R() * 0.95;
@@ -905,7 +924,7 @@ export function buildCity(scene, M) {
     const town = x > 250 && x < 680 && z > -340 && z < 200;
     const n = fbm(x * 0.006 + 30, z * 0.006, 3);
     if (town ? R() > 0.05 : n < 0.42 && R() > 0.25) continue;
-    if (insideFoot(footprints, x, z, 2)) continue;
+    if (insideFoot(footprints, x, z, 2) || tramDist(x, z) < 4.5) continue;
     const e = 4, sl = Math.abs(ground(x + e, z) - ground(x - e, z)) + Math.abs(ground(x, z + e) - ground(x, z - e));
     if (sl > 9) continue;
     trees.push([new THREE.Vector3(x, y - 0.3, z), R.range(0.8, 1.7) * (y > 120 ? 1.2 : 1), y > 90 || R() < 0.25 ? 'pine' : 'oak']);
