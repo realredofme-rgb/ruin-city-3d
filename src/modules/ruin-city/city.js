@@ -1,6 +1,6 @@
 // 城市：断裂的高楼废墟、高架残桥、摩天轮、沉没楼群、雾港老城、码头与灯塔、白塔与浮空岛
 import * as THREE from 'three';
-import { Builder, mat, rng, fbm, smooth, clamp, lerp, wallTextures } from '../../util.js';
+import { Builder, mat, rng, fbm, smooth, clamp, lerp } from '../../util.js';
 import { ground, shoreZ } from './terrain.js';
 
 /* ---------- 区域划分 ---------- */
@@ -24,6 +24,24 @@ export const HIGHWAY = new THREE.CatmullRomCurve3([
 ].map(p => new THREE.Vector3(p[0], p[1], p[2])));
 const HW_GAPS = [[0.205, 0.235], [0.47, 0.5], [0.66, 0.672]];
 
+/* 电车线（沿海岸，离岸 30 米）。先算出它在地面上的走向，摆楼时给它让路 */
+const TRAM_XZ = (() => {
+  const tp = []; for (let x = -470; x <= 610; x += 30) tp.push(new THREE.Vector3(x, 0, shoreZ(x) - 30));
+  const c = new THREE.CatmullRomCurve3(tp), xs = [], zs = [];
+  for (let i = 0; i <= 2000; i++) { const p = c.getPointAt(i / 2000); xs.push(p.x); zs.push(p.z); }
+  return { xs, zs };
+})();
+/** 离电车线的大致距离（米）。线路自西向东单调，按 x 插值出线上的 z */
+export function tramDist(x, z) {
+  const { xs, zs } = TRAM_XZ;
+  if (x < xs[0] - 5 || x > xs[xs.length - 1] + 5) return 1e9;
+  let lo = 0, hi = xs.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (xs[m] < x) lo = m; else hi = m; }
+  const t = clamp((x - xs[lo]) / Math.max(xs[hi] - xs[lo], 1e-6), 0, 1), zt = lerp(zs[lo], zs[hi], t);
+  const slope = (zs[hi] - zs[lo]) / Math.max(xs[hi] - xs[lo], 1e-6);
+  return Math.abs(z - zt) / Math.sqrt(1 + slope * slope);
+}
+
 function distToCurve(curve, x, z, n = 140) {
   let best = 1e9;
   for (let i = 0; i <= n; i++) { const p = curve.getPointAt(i / n); best = Math.min(best, Math.hypot(p.x - x, p.z - z)); }
@@ -32,7 +50,7 @@ function distToCurve(curve, x, z, n = 140) {
 
 /* ---------- 材质 ---------- */
 export function makeMaterials() {
-  const hs = wallTextures('house', 23);
+  const hs = houseTextures(23), roofTex = roofTexture(5);
   const seam = (() => { // 白塔的发光接缝
     const c = document.createElement('canvas'); c.width = 64; c.height = 256; const g = c.getContext('2d');
     g.fillStyle = '#000'; g.fillRect(0, 0, 64, 256);
@@ -44,7 +62,8 @@ export function makeMaterials() {
   const towerMat = k => weatherMat(new THREE.MeshStandardMaterial({ map: tex[k].map, bumpMap: tex[k].bump, bumpScale: 2.2, roughnessMap: tex[k].rough, vertexColors: true, roughness: 1 }));
   return {
     tower: towerMat('grid'), towerResi: towerMat('resi'), towerBrut: towerMat('brut'),
-    house: litMat(new THREE.MeshStandardMaterial({ map: hs.map, emissiveMap: hs.emissiveMap, emissive: 0xffffff, emissiveIntensity: 1.6, vertexColors: true, roughness: 0.88 })),
+    house: litMat(new THREE.MeshStandardMaterial({ map: hs.map, emissiveMap: hs.emissiveMap, bumpMap: hs.bump, bumpScale: 1.6, emissive: 0xffffff, emissiveIntensity: 1.6, vertexColors: true, roughness: 0.88 })),
+    roof: new THREE.MeshStandardMaterial({ map: roofTex.map, bumpMap: roofTex.bump, bumpScale: 2, vertexColors: true, roughness: 0.82 }),
     plain: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }),
     tree: swayMat(),
     beacon: new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 0.35, 0.2) }),
@@ -57,6 +76,76 @@ export function makeMaterials() {
     crystal: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.9, 2.4, 2.8) }),
     ring: new THREE.MeshBasicMaterial({ color: new THREE.Color(1.2, 2.2, 2.6), transparent: true, opacity: 0.75, depthWrite: false })
   };
+}
+
+/* ---------- 雾港小楼的立面 ---------- */
+/** 4×4 扇窗，每格 3 米：白窗框、两扇百叶（各家颜色不同，偶尔掉了一扇）、窗台和花箱。emissive 和 map 对齐 */
+function houseTextures(seed) {
+  const R = rng(seed), S = 1024, cell = S / 4;
+  const mk = () => { const c = document.createElement('canvas'); c.width = c.height = S; return [c, c.getContext('2d')]; };
+  const [c, g] = mk(), [e, ge] = mk(), [b, gb] = mk();
+  const rect = (ctx, col, x, y, w, h) => { ctx.fillStyle = col; ctx.fillRect(x, y, w, h); };
+  rect(g, '#f1e9da', 0, 0, S, S); rect(ge, '#000', 0, 0, S, S); rect(gb, '#8c8c8c', 0, 0, S, S);
+  // 灰泥的起伏、剥落露出的砖
+  for (let i = 0; i < 1400; i++) { const s = 4 + R() * 40; g.fillStyle = `rgba(${R() < 0.5 ? '120,100,80' : '255,252,244'},${0.015 + R() * 0.03})`; g.beginPath(); g.ellipse(R() * S, R() * S, s, s * (0.5 + R()), R() * 3, 0, 7); g.fill(); }
+  for (let i = 0; i < 7; i++) {
+    const x = R() * S, y = R() * S, w = 24 + R() * 44, h = 16 + R() * 30;
+    rect(g, 'rgba(150,92,70,0.3)', x, y, w, h); rect(gb, '#6a6a6a', x, y, w, h);
+    for (let yy = 0; yy < h; yy += 8) for (let xx = (yy / 8 % 2) * 8; xx < w; xx += 16) { rect(g, 'rgba(70,50,40,0.35)', x + xx, y + yy, 1.5, 8); rect(g, 'rgba(70,50,40,0.35)', x, y + yy, w, 1.5); }
+  }
+  const SHUT = ['#5f7d5a', '#4c6f7a', '#8b4a38', '#6d7f8c', '#a8875a', '#3f5f52'];
+  for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) {
+    const x0 = i * cell, y0 = j * cell;
+    rect(g, 'rgba(140,120,96,0.28)', x0, y0 + cell - 10, cell, 8); rect(gb, '#b0b0b0', x0, y0 + cell - 10, cell, 8); // 楼层线
+    const ww = cell * 0.3, wh = cell * 0.5, wx = x0 + (cell - ww) / 2, wy = y0 + cell * 0.2;
+    // 窗洞 + 玻璃 + 十字窗棂
+    rect(g, '#efece4', wx - 7, wy - 7, ww + 14, wh + 14); rect(gb, '#d8d8d8', wx - 7, wy - 7, ww + 14, wh + 14);
+    const gg = g.createLinearGradient(wx, wy, wx + ww, wy + wh); gg.addColorStop(0, '#4a5459'); gg.addColorStop(1, '#2b2f31'); g.fillStyle = gg; g.fillRect(wx, wy, ww, wh);
+    rect(gb, '#303030', wx, wy, ww, wh);
+    rect(g, 'rgba(215,228,232,0.2)', wx + 4, wy + 4, ww * 0.25, wh - 8);
+    rect(g, '#e9e5dc', wx + ww / 2 - 2.5, wy, 5, wh); rect(g, '#e9e5dc', wx, wy + wh * 0.42, ww, 5);
+    if (R() < 0.55) { ge.fillStyle = R() < 0.7 ? '#ffbe6e' : '#ffe0a8'; ge.fillRect(wx, wy, ww, wh); ge.fillStyle = '#000'; ge.fillRect(wx + ww / 2 - 2.5, wy, 5, wh); ge.fillRect(wx, wy + wh * 0.42, ww, 5); }
+    // 百叶
+    const sc = SHUT[Math.floor(R() * SHUT.length)], sw = ww * 0.52;
+    for (const side of [-1, 1]) {
+      if (R() < 0.1) continue;
+      const sx = side < 0 ? wx - 7 - sw : wx + ww + 7, skew = R() < 0.06 ? 0.12 : 0;
+      g.save(); g.translate(sx + sw / 2, wy + wh / 2); g.rotate(skew * side); g.fillStyle = sc; g.fillRect(-sw / 2, -wh / 2 - 4, sw, wh + 8);
+      g.fillStyle = 'rgba(0,0,0,0.22)'; for (let k = -wh / 2; k < wh / 2; k += 7) g.fillRect(-sw / 2 + 3, k, sw - 6, 2);
+      g.restore(); rect(gb, '#b8b8b8', sx, wy - 4, sw, wh + 8);
+    }
+    // 窗台和花箱
+    rect(g, '#d9d2c2', wx - 12, wy + wh + 7, ww + 24, 8); rect(gb, '#e6e6e6', wx - 12, wy + wh + 7, ww + 24, 8);
+    if (R() < 0.45) {
+      rect(g, '#7a5a3e', wx - 4, wy + wh - 6, ww + 8, 13); rect(gb, '#d0d0d0', wx - 4, wy + wh - 14, ww + 8, 21);
+      for (let k = 0; k < 26; k++) { g.fillStyle = R() < 0.55 ? `hsl(${100 + R() * 30},35%,${30 + R() * 14}%)` : ['#c8453c', '#e06a8a', '#f0d060', '#f4f0ea'][Math.floor(R() * 4)]; g.beginPath(); g.arc(wx - 2 + R() * (ww + 4), wy + wh - 8 + R() * 6, 3 + R() * 3, 0, 7); g.fill(); }
+    }
+    // 窗下的水痕
+    if (R() < 0.35) { const gl = g.createLinearGradient(0, wy + wh + 15, 0, wy + wh + 120); gl.addColorStop(0, 'rgba(110,96,76,0.22)'); gl.addColorStop(1, 'rgba(110,96,76,0)'); g.fillStyle = gl; g.fillRect(wx + R() * ww, wy + wh + 15, 4 + R() * 10, 110); }
+  }
+  rect(g, '#ece3d3', 0, S - 44, 64, 30); // v≈0.03 处的素墙（顶、底面）
+  const T = cv => { const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8; return t; };
+  const map = T(c), em = T(e); map.colorSpace = em.colorSpace = THREE.SRGBColorSpace;
+  return { map, emissiveMap: em, bump: T(b) };
+}
+/** 屋瓦：灰度贴图（颜色由顶点色给），一行行筒瓦沿坡向排开。UV 是米，2 米一张 */
+function roofTexture(seed) {
+  const R = rng(seed), S = 256;
+  const mk = () => { const c = document.createElement('canvas'); c.width = c.height = S; return [c, c.getContext('2d')]; };
+  const [c, g] = mk(), [b, gb] = mk();
+  g.fillStyle = '#e8e8e8'; g.fillRect(0, 0, S, S); gb.fillStyle = '#808080'; gb.fillRect(0, 0, S, S);
+  const row = S / 8, col = S / 10;
+  for (let i = 0; i < 8; i++) for (let j = 0; j < 10; j++) {
+    const x = i * row, y = j * col + (i % 2) * col / 2, v = 200 + R() * 55;
+    const gr = g.createLinearGradient(x, 0, x + row, 0); gr.addColorStop(0, `rgb(${v * 0.62},${v * 0.62},${v * 0.62})`); gr.addColorStop(0.75, `rgb(${v},${v},${v})`); gr.addColorStop(1, `rgb(${v * 0.8},${v * 0.8},${v * 0.8})`);
+    g.fillStyle = gr; g.fillRect(x, y, row, col - 1.5); g.fillRect(x, y - S, row, col - 1.5);
+    const gb2 = gb.createLinearGradient(x, 0, x + row, 0); gb2.addColorStop(0, '#303030'); gb2.addColorStop(0.75, '#d0d0d0'); gb2.addColorStop(1, '#909090');
+    gb.fillStyle = gb2; gb.fillRect(x, y, row, col - 1.5); gb.fillRect(x, y - S, row, col - 1.5);
+  }
+  for (let i = 0; i < 60; i++) { g.fillStyle = `rgba(${R() < 0.6 ? '60,70,40' : '40,36,30'},${0.05 + R() * 0.08})`; g.beginPath(); g.arc(R() * S, R() * S, 3 + R() * 14, 0, 7); g.fill(); } // 青苔和污渍
+  const T = cv => { const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8; t.repeat.set(0.5, 0.5); return t; };
+  const map = T(c); map.colorSpace = THREE.SRGBColorSpace;
+  return { map, bump: T(b) };
 }
 
 /* ---------- 废墟高楼的立面 ---------- */
@@ -214,7 +303,7 @@ export function buildCity(scene, M) {
   const R = rng(20261125);
   const TB = Object.fromEntries(STYLES.map(k => [k, new WBuilder()]));
   const detail = new Builder(); // 阳台、楼顶水箱这类小零件：离得远时整块隐藏
-  const house = new Builder(true), plain = new Builder(), leaf = new Builder(), metal = new Builder(), rock = new Builder(), glowB = new Builder();
+  const house = new Builder(true), roofB = new Builder(), plain = new Builder(), leaf = new Builder(), metal = new Builder(), rock = new Builder(), glowB = new Builder();
   const footprints = [], trees = [], bushes = [], lamps = [], grass = [], tops = [], beacons = [];
   const v = new THREE.Vector3();
   const world = (m, x, y, z) => v.set(x, y, z).applyMatrix4(m).clone();
@@ -458,19 +547,20 @@ export function buildCity(scene, M) {
     const lots = R() < 0.45 ? [[0, 0, R.range(22, 32), R.range(20, 30)]] : [[-9.5, 0, R.range(14, 17), R.range(18, 30)], [9.5, R.range(-4, 4), R.range(13, 17), R.range(16, 28)]];
     for (const [lx, lz, w, d] of lots) {
       const x = cx + lx * ca, z = cz + lx * sa + lz;
-      if (hwBlock(x, z, Math.max(w, d) / 2)) { if (R() < 0.6) trees.push([new THREE.Vector3(x, ground(x, z), z), R.range(0.8, 1.3), 'oak']); continue; }
+      if (hwBlock(x, z, Math.max(w, d) / 2) || tramDist(x, z) < Math.max(w, d) * 0.75 + 5) { if (R() < 0.6) trees.push([new THREE.Vector3(x, ground(x, z), z), R.range(0.8, 1.3), 'oak']); continue; }
       if (R() < 0.07) { // 空地：长满树
         for (let i = 0; i < 6; i++) { const tx = x + R.range(-12, 12), tz = z + R.range(-12, 12); trees.push([new THREE.Vector3(tx, ground(tx, tz), tz), R.range(0.8, 1.5), 'oak']); }
         continue;
       }
-      const r = R(), mode = r < 0.05 ? 'fallen' : r < 0.2 ? 'lean' : 'stand';
+      const r = R(); let mode = r < 0.05 ? 'fallen' : r < 0.2 ? 'lean' : 'stand';
+      if (mode === 'fallen' && tramDist(x, z) < 85) mode = 'lean'; // 倒下的楼别横在电车道上
       ruinTower(x, z, w, d, H * R.range(0.7, 1.15), ang + R.range(-0.04, 0.04), mode);
     }
   }
   // 街道上的树、灌木和废弃车辆
   for (let i = 0; i < 16000; i++) {
     const x = R.range(-600, 240), z = R.range(-360, 170);
-    if (ruinMask(x, z) < 0.5 || insideFoot(footprints, x, z, 1.5)) continue;
+    if (ruinMask(x, z) < 0.5 || insideFoot(footprints, x, z, 1.5) || tramDist(x, z) < 4.5) continue;
     const y = ground(x, z);
     if (i > 5000) { if (fbm(x * 0.04, z * 0.04, 2) > 0.42) grass.push([new THREE.Vector3(x, y - 0.1, z), R.range(0.8, 1.8)]); continue; }
     if (insideFoot(footprints, x, z, 3)) continue;
@@ -549,7 +639,7 @@ export function buildCity(scene, M) {
   function townHouse(x, z, w, d, h, yaw) {
     const gy = Math.min(ground(x - w / 2, z - d / 2), ground(x + w / 2, z + d / 2), ground(x + w / 2, z - d / 2), ground(x - w / 2, z + d / 2));
     const gyMax = Math.max(ground(x - w / 2, z - d / 2), ground(x + w / 2, z + d / 2), ground(x, z));
-    if (gyMax - gy > 7 || distToCurve(HIGHWAY, x, z, 90) < 13) return false;
+    if (gyMax - gy > 7 || distToCurve(HIGHWAY, x, z, 90) < 13 || tramDist(x, z) < Math.max(w, d) * 0.75 + 3) return false;
     const y0 = gy - 0.5, m = mat(x, y0, z, yaw), top = gyMax + h;
     const wall = WALL[Math.floor(R() * WALL.length)].clone().multiplyScalar(R.range(0.9, 1.03));
     const lit = R() * 0.95;
@@ -559,10 +649,41 @@ export function buildCity(scene, M) {
     const sh = new THREE.Shape([new THREE.Vector2(-w / 2 - 0.5, 0), new THREE.Vector2(w / 2 + 0.5, 0), new THREE.Vector2(0, rh)]);
     const rg = new THREE.ExtrudeGeometry(sh, { depth: d + 0.8, bevelEnabled: false }); rg.translate(0, 0, -d / 2 - 0.4);
     const turn = R() < 0.5 ? 0 : Math.PI / 2;
-    plain.add(rg, mat(x, top - y0 + y0, z, yaw + turn, 0, 0, turn ? d / w : 1, 1, turn ? w / d : 1), roof);
-    if (R() < 0.6) plain.box(0.9, rh + 1.2, 0.9, mat(x + R.range(-w / 3, w / 3), top, z + R.range(-d / 4, d / 4), yaw), C(0x8a6e5a));
+    roofB.add(rg, mat(x, top - y0 + y0, z, yaw + turn, 0, 0, turn ? d / w : 1, 1, turn ? w / d : 1), roof.clone().multiplyScalar(1.18));
+    if (R() < 0.6) {
+      const cm = mat(x + R.range(-w / 3, w / 3), top, z + R.range(-d / 4, d / 4), yaw);
+      plain.box(0.9, rh + 1.2, 0.9, cm, C(0x8a6e5a));
+      if (!LOW) detail.box(1.2, 0.25, 1.2, cm.clone().multiply(mat(0, rh + 1.2, 0)), C(0x6e5a4a)); // 烟囱帽
+    }
+    townDetail(x, z, w, d, y0, gyMax, top, yaw, wall);
     footprints.push({ x, z, hx: w / 2 + 0.5, hz: d / 2 + 0.5, c: Math.cos(yaw), s: Math.sin(yaw), kind: 'house', no: ++houseNo, floors: Math.max(2, Math.round(h / 3.4)), lit });
     return true;
+  }
+  /** 小楼的零件：檐口、楼层线（总是有）；门、阳台、雨棚（近处才画，流畅档不做）。正面朝海（局部 +z） */
+  function townDetail(x, z, w, d, y0, gyMax, top, yaw, wall) {
+    const RD = rng(((Math.round(x * 29) * 73856093) ^ (Math.round(z * 31) * 19349663)) >>> 0 || 3);
+    const m = mat(x, y0, z, yaw), L = (lx, ly, lz) => m.clone().multiply(mat(lx, ly, lz)), tl = top - y0, fy = gyMax - y0;
+    plain.box(w + 0.5, 0.4, d + 0.5, L(0, tl - 0.4, 0), wall.clone().multiplyScalar(0.9));
+    if (tl - fy > 6) plain.box(w + 0.16, 0.22, d + 0.16, L(0, fy + 3.2, 0), wall.clone().multiplyScalar(0.93));
+    if (LOW) return;
+    const dx = RD.range(-w / 4, w / 4), shop = RD() < 0.2;
+    const DOOR = [0x5a3e2c, 0x3f5a52, 0x6e2f28, 0x2f4450, 0x7a6a4a];
+    detail.box(shop ? 2.6 : 1.3, shop ? 2.5 : 2.3, 0.16, L(dx, fy, d / 2), C(shop ? 0x2c3033 : DOOR[Math.floor(RD() * DOOR.length)]));
+    detail.box(shop ? 3 : 1.7, 0.28, 0.4, L(dx, fy + (shop ? 2.5 : 2.3), d / 2 + 0.1), wall.clone().multiplyScalar(0.85));
+    detail.box(shop ? 3 : 1.6, 0.2, 0.7, L(dx, fy - 0.2, d / 2 + 0.3), C(0x9c8f7c)); // 台阶
+    if (shop) { // 店面的雨棚
+      const ac = C([0xb5583b, 0x4f7a6e, 0xc49a4a, 0x51606a, 0x8d3f35][Math.floor(RD() * 5)]);
+      detail.box(3.4, 0.1, 1.7, L(dx, fy + 3, d / 2).multiply(mat(0, 0, 0, 0, 0.32, 0)).multiply(mat(0, 0, 0.85)), ac);
+      detail.box(3.4, 0.35, 0.06, L(dx, fy + 2.5, d / 2 + 1.6), ac);
+    }
+    if (tl - fy > 7 && RD() < 0.45) { // 二楼的铁栏杆阳台 + 花
+      const bw = RD.range(2.2, Math.min(4, w - 2)), bx = RD.range(-w / 2 + bw / 2 + 0.5, w / 2 - bw / 2 - 0.5), by = fy + 3.4 + (tl - fy > 10 && RD() < 0.4 ? 3.2 : 0);
+      detail.box(bw, 0.18, 1, L(bx, by, d / 2 + 0.5), wall.clone().multiplyScalar(0.88));
+      detail.box(bw, 0.06, 0.06, L(bx, by + 1, d / 2 + 0.97), RAIL);
+      for (let k = 0; k <= Math.round(bw / 0.6); k++) detail.box(0.04, 1, 0.04, L(bx - bw / 2 + k * bw / Math.round(bw / 0.6), by + 0.18, d / 2 + 0.97), RAIL);
+      for (const sd of [-1, 1]) detail.box(0.06, 0.06, 1, L(bx + sd * bw / 2, by + 1, d / 2 + 0.5), RAIL);
+      if (RD() < 0.7) bushes.push([new THREE.Vector3().setFromMatrixPosition(L(bx + RD.range(-bw / 3, bw / 3), by + 0.5, d / 2 + 0.6)), RD.range(0.35, 0.6)]);
+    }
   }
   for (let x = 262; x < 660; x += R.range(11, 15)) for (let z = -330; z < 170; z += R.range(10.5, 14)) {
     const s = shoreZ(x); if (z > s - 40) continue;
@@ -590,10 +711,16 @@ export function buildCity(scene, M) {
     const z = shoreZ(x) - 5, z2 = shoreZ(x + 8) - 5, yaw = Math.atan2(8, -(z2 - z)) - Math.PI / 2;
     plain.box(8.6, 7.6, 14, mat(x + 4, -5, (z + z2) / 2, -Math.atan2(z2 - z, 8)), C(0x9b9180), { moss: 0.15 });
     if (x % 24 < 8) lamps.push(new THREE.Vector3(x, 6.2, z - 4));
+    if (!LOW && x % 16 < 8) detail.add(new THREE.CylinderGeometry(0.28, 0.34, 0.7, 8).translate(0, 0.35, 0), mat(x, 2.6, z + 1.2), C(0x3a3a38)); // 系缆桩
   }
   for (const px of [300, 360, 420, 500]) {
     const z0 = shoreZ(px) + 1, len = R.range(40, 70);
-    plain.box(5, 0.6, len, mat(px, 2.2, z0 + len / 2), C(0x7a6248));
+    { // 木栈桥：一块块木板，颜色深浅不一，偶尔缺一块；两边一排矮木桩
+      const RP = rng(px * 7 + 1);
+      plain.box(4.6, 0.3, len, mat(px, 2.1, z0 + len / 2), C(0x4e3e2e)); // 下面的龙骨
+      for (let k = 0; k < len - 0.5; k += 0.95) if (RP() > 0.04) plain.box(5, 0.22, 0.85, mat(px + RP.range(-0.08, 0.08), 2.4, z0 + k + 0.45, RP.range(-0.02, 0.02)), C(0x7a6248).multiplyScalar(RP.range(0.8, 1.12)));
+      for (let k = 3; k < len; k += 6) for (const sx of [-2.3, 2.3]) plain.box(0.3, 0.9, 0.3, mat(px + sx, 2.6, z0 + k), C(0x5c4a38));
+    }
     for (let k = 0; k < len; k += 6) for (const sx of [-2.2, 2.2]) plain.box(0.5, 10, 0.5, mat(px + sx, -8, z0 + k + 2), C(0x5c4a38));
     lamps.push(new THREE.Vector3(px, 5.8, z0 + len - 2));
   }
@@ -601,7 +728,18 @@ export function buildCity(scene, M) {
     const x = 236 + i * 24, z = shoreZ(x) - 15, gy = ground(x, z) - 0.5;
     house.box(22, 9, 14, mat(x, gy, z, -0.05), C(R.pick([0xc9b8a0, 0xa8b4b0, 0xb89a80])), { tile: [24, 16], lit: 0.2 + R() * 0.7 });
     const sh = new THREE.Shape([new THREE.Vector2(-11.6, 0), new THREE.Vector2(11.6, 0), new THREE.Vector2(0, 3.2)]);
-    plain.add(new THREE.ExtrudeGeometry(sh, { depth: 14.8, bevelEnabled: false }).translate(0, 0, -7.4), mat(x, gy + 9, z, -0.05), C(R.pick([0x8d3f35, 0x51606a, 0x4f6f78])));
+    roofB.add(new THREE.ExtrudeGeometry(sh, { depth: 14.8, bevelEnabled: false }).translate(0, 0, -7.4), mat(x, gy + 9, z, -0.05), C(R.pick([0x8d3f35, 0x51606a, 0x4f6f78])).multiplyScalar(1.18));
+    { // 仓库：朝海的两扇大门、壁柱、门前的货箱和木桶
+      const wm = mat(x, gy, z, -0.05), WL = (lx, ly, lz) => wm.clone().multiply(mat(lx, ly, lz)), RD = rng(1000 + i * 37);
+      for (const dx of [-5.5, 5.5]) { plain.box(4.2, 5.6, 0.25, WL(dx, 0.5, 7), C(RD() < 0.5 ? 0x5a4a3a : 0x3f5a5a)); plain.box(4.8, 0.4, 0.5, WL(dx, 6.1, 7.1), C(0x8a7d6a)); }
+      for (let k = -2; k <= 2; k++) plain.box(0.6, 9, 0.5, WL(k * 5.2, 0, 7.1), C(0x9a8e7c));
+      plain.box(23, 0.5, 15, WL(0, 8.6, 0), C(0x8a7d6a));
+      if (!LOW) for (let k = 0; k < 7; k++) {
+        const bx = RD.range(-10, 10), bz = RD.range(9, 13), m2 = WL(bx, 0.5, bz).multiply(mat(0, 0, 0, RD() * 3));
+        if (RD() < 0.6) { const s = RD.range(1, 1.6); detail.box(s * 1.3, s, s, m2, C([0x8a6a48, 0x6e5a3e, 0x5a6e70, 0xa0483a][Math.floor(RD() * 4)])); if (RD() < 0.4) detail.box(s, s * 0.9, s, m2.clone().multiply(mat(0, s, 0, 0.3)), C(0x7a5e40)); }
+        else for (let q = 0; q < 3; q++) detail.add(new THREE.CylinderGeometry(0.4, 0.4, 1.1, 8).translate(0, 0.55, 0), m2.clone().multiply(mat(q * 0.85 - 0.85, 0, 0)), C([0x4a6a78, 0x8a3a2e, 0x6a6a5a][q]));
+      }
+    }
     footprints.push({ x, z, hx: 11.5, hz: 7.5, c: 1, s: 0, kind: 'warehouse', no: i + 1 });
   }
   for (const [x, ry] of [[395, 0.3], [445, -0.2], [525, 0.5]]) { // 门式起重机
@@ -611,6 +749,11 @@ export function buildCity(scene, M) {
     metal.box(4, 3.5, 4, m.clone().multiply(mat(0, 23.4, -2)), C(0xe8e0d0));
     metal.box(1.4, 1.4, 48, m.clone().multiply(mat(0, 24.5, 8, 0, -0.18, 0)), col);
     metal.box(0.2, 12, 0.2, m.clone().multiply(mat(0, 16, 26)), C(0x333333));
+    // 腿间的横撑和斜撑，吊臂的桁架肋
+    for (const lz of [-4, 4]) { metal.box(10, 0.5, 0.5, m.clone().multiply(mat(0, 8, lz)), col); metal.box(0.4, Math.hypot(10, 13), 0.4, m.clone().multiply(mat(0, 8, lz, 0, 0, Math.atan2(10, 13))), col); }
+    for (const lx of [-5, 5]) { metal.box(0.5, 0.5, 8, m.clone().multiply(mat(lx, 12, 0)), col); metal.box(0.4, Math.hypot(8, 9), 0.4, m.clone().multiply(mat(lx, 12, -4, 0, Math.atan2(8, 9), 0)), col); }
+    for (let k = -22; k <= 22; k += 4) metal.box(1.8, 0.25, 0.25, m.clone().multiply(mat(0, 24.5, 8, 0, -0.18, 0)).multiply(mat(0, 1.45, k)), col);
+    metal.box(4.05, 1.1, 2.6, m.clone().multiply(mat(0, 25, -2)), C(0x2a3236)); // 驾驶室的窗带
   }
   /* 灯塔 */
   const LH = new THREE.Vector3(648, 0, shoreZ(648) - 22); LH.y = ground(LH.x, LH.z) - 1;
@@ -618,6 +761,10 @@ export function buildCity(scene, M) {
     const m = mat(LH.x, LH.y, LH.z);
     for (let i = 0; i < 5; i++) plain.add(new THREE.CylinderGeometry(3.6 - (i + 1) * 0.36, 3.6 - i * 0.36, 6, 16).translate(0, 3 + i * 6, 0), m, C(i % 2 ? 0xb3402e : 0xf2ede4));
     plain.add(new THREE.CylinderGeometry(3.2, 3.2, 0.8, 16).translate(0, 30.4, 0), m, C(0x333a3c));
+    plain.add(new THREE.CylinderGeometry(3.9, 3.6, 0.35, 20).translate(0, 30.6, 0), m, C(0x333a3c)); // 环形走廊
+    metal.add(new THREE.TorusGeometry(3.85, 0.06, 4, 32).rotateX(Math.PI / 2).translate(0, 31.8, 0), m, C(0x2a2e30));
+    for (let k = 0; k < 16; k++) { const a = k / 16 * Math.PI * 2; metal.box(0.06, 1.1, 0.06, m.clone().multiply(mat(Math.cos(a) * 3.85, 30.75, Math.sin(a) * 3.85)), C(0x2a2e30)); }
+    for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2; metal.box(0.12, 3, 0.12, m.clone().multiply(mat(Math.cos(a) * 1.7, 30.8, Math.sin(a) * 1.7)), C(0x2a2e30)); } // 灯室的窗框
     glowB.add(new THREE.CylinderGeometry(1.6, 1.6, 3, 12).translate(0, 32.3, 0), m, C(0xffffff));
     plain.add(new THREE.ConeGeometry(2.4, 3, 12).translate(0, 35.3, 0), m, C(0xb3402e));
     house.box(8, 5, 6, mat(LH.x - 6, LH.y, LH.z + 2), C(0xf2ede4), { tile: [8, 8], lit: 0.1 });
@@ -777,7 +924,7 @@ export function buildCity(scene, M) {
     const town = x > 250 && x < 680 && z > -340 && z < 200;
     const n = fbm(x * 0.006 + 30, z * 0.006, 3);
     if (town ? R() > 0.05 : n < 0.42 && R() > 0.25) continue;
-    if (insideFoot(footprints, x, z, 2)) continue;
+    if (insideFoot(footprints, x, z, 2) || tramDist(x, z) < 4.5) continue;
     const e = 4, sl = Math.abs(ground(x + e, z) - ground(x - e, z)) + Math.abs(ground(x, z + e) - ground(x, z - e));
     if (sl > 9) continue;
     trees.push([new THREE.Vector3(x, y - 0.3, z), R.range(0.8, 1.7) * (y > 120 ? 1.2 : 1), y > 90 || R() < 0.25 ? 'pine' : 'oak']);
@@ -789,7 +936,7 @@ export function buildCity(scene, M) {
   const add = (b, m, o) => { const mesh = b.build(m, o); if (mesh) scene.add(mesh); return mesh; };
   add(TB.grid, M.tower); add(TB.resi, M.towerResi); add(TB.brut, M.towerBrut);
   const detailMesh = add(detail, M.plain);
-  add(house, M.house); add(plain, M.plain); add(leaf, M.leaf); add(metal, M.metal); add(rock, M.rock);
+  add(house, M.house); add(roofB, M.roof); add(plain, M.plain); add(leaf, M.leaf); add(metal, M.metal); add(rock, M.rock);
   add(glowB, M.glow, { cast: false, receive: false });
 
   // 树（实例化；浮空岛上的树挂到岛的组里）
