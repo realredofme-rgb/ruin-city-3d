@@ -7,7 +7,7 @@
 
 import m1 from './ruin-city/index.js';
 
-import { rift as m2 } from './placeholders.js';
+import m2 from './gobi-rift/index.js';
 
 import { wetland as m3 } from './placeholders.js';
 
