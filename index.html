@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>雾港残响</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;900&display=swap" rel="stylesheet">
+<style>
+/* VOICE 奇幻游戏：安静、褪色、带一点哀伤
+   IDEA 废墟城市里幸存的一台旧终端：米色纸面、细线、方块标记
+   PICTURE 全屏实时 3D 城市，界面只占边角
+   COLOUR 场景自带天色；界面为羊皮米 #d4cfb8、炭褐 #45423a，强调色暖橙 #c8643c
+   TYPE Noto Serif SC 900 标题 + Noto Sans SC 正文
+   LAYOUT 桌面：左上铭牌、左侧可收起面板、底部居中字幕；手机：面板从底部弹出 */
+:root { color-scheme: dark; --paper: rgba(212, 207, 184, 0.93); --paper2: #c3bda4; --ink: #45423a; --ink2: #6d6957; --hot: #c8643c; --line: rgba(69, 66, 58, 0.45); }
+* { box-sizing: border-box; min-width: 0; }
+html, body { height: 100%; margin: 0; overflow: hidden; background: #0d1116; color: var(--ink); font: 14px/1.5 "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif; -webkit-font-smoothing: antialiased; }
+button, input { font: inherit; color: inherit; }
+#stage { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
+.ui { position: fixed; z-index: 2; }
+.paper { background: var(--paper); box-shadow: 0 0 0 1px rgba(69, 66, 58, 0.25), 4px 4px 0 rgba(0, 0, 0, 0.18); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+
+#plate { left: max(16px, env(safe-area-inset-left)); top: max(16px, env(safe-area-inset-top)); display: flex; align-items: stretch; gap: 14px; padding: 10px 16px 10px 14px; border-left: 6px solid var(--ink); }
+#plate h1 { margin: 0; font: 900 26px/1.05 "Noto Serif SC", "Songti SC", serif; letter-spacing: 0.08em; color: var(--ink); }
+#plate .sub { margin-top: 4px; font-size: 12.5px; color: var(--ink2); }
+#plate .read { border-left: 1px solid var(--line); padding-left: 14px; display: grid; align-content: center; }
+#clock { font: 700 22px/1 "Noto Sans SC", sans-serif; font-variant-numeric: tabular-nums; }
+#wx, #modeName { font-size: 12.5px; color: var(--ink2); white-space: nowrap; }
+
+#tools { right: max(16px, env(safe-area-inset-right)); top: max(16px, env(safe-area-inset-top)); display: flex; gap: 6px; }
+.tool { height: 36px; padding: 0 14px; border: 0; background: var(--paper); cursor: pointer; font-size: 13px; box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.18); }
+.tool:hover, .tool[aria-pressed="true"] { background: var(--ink); color: #e8e3cc; }
+#bExit { background: var(--hot); color: #fff6e8; }
+
+#panel { left: max(16px, env(safe-area-inset-left)); top: 104px; width: 300px; max-height: calc(100% - 124px); overflow-y: auto; padding: 4px 14px 14px; scrollbar-width: thin; scrollbar-color: var(--ink2) transparent; }
+#panel section { padding-top: 12px; }
+#panel h2 { margin: 0 0 8px; font: 700 13px/1 "Noto Sans SC", sans-serif; display: flex; align-items: center; gap: 8px; }
+#panel h2::before { content: ""; width: 8px; height: 8px; background: var(--ink); }
+#panel h2::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.row { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.row + .row { margin-top: 6px; }
+.lbl { width: 56px; flex: none; font-size: 12.5px; color: var(--ink2); }
+.btn, .seg button { min-height: 32px; padding: 4px 9px; border: 1px solid var(--line); background: transparent; cursor: pointer; font-size: 13px; flex: 1 1 auto; white-space: nowrap; }
+.btn:hover, .seg button:hover, .tour:hover { background: rgba(69, 66, 58, 0.12); }
+.btn.on, .seg button.on, .tour.on { background: var(--ink); color: #ece7d0; border-color: var(--ink); }
+.seg { display: flex; flex: 1; }
+.seg button + button { border-left: 0; }
+.tour { display: grid; gap: 1px; width: 100%; text-align: left; padding: 7px 10px 8px 12px; border: 0; border-left: 3px solid var(--ink2); background: transparent; cursor: pointer; }
+.tour + .tour { margin-top: 5px; }
+.tour b { font: 600 15px/1.3 "Noto Serif SC", serif; }
+.tour span { font-size: 12.5px; color: inherit; opacity: 0.78; }
+.tour.on { border-left-color: var(--hot); }
+input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 26px; background: transparent; cursor: pointer; }
+input[type="range"]::-webkit-slider-runnable-track { height: 6px; background: linear-gradient(90deg, #15213a 0%, #2c3a66 20%, #f0a060 27%, #c9d6d8 40%, #c9d6d8 62%, #f3b07a 72%, #3a3456 80%, #15213a 100%); border: 1px solid var(--ink); }
+input[type="range"]::-moz-range-track { height: 6px; background: linear-gradient(90deg, #15213a 0%, #2c3a66 20%, #f0a060 27%, #c9d6d8 40%, #c9d6d8 62%, #f3b07a 72%, #3a3456 80%, #15213a 100%); border: 1px solid var(--ink); }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 22px; margin-top: -9px; background: var(--ink); border: 2px solid #ece7d0; }
+input[type="range"]::-moz-range-thumb { width: 10px; height: 20px; background: var(--ink); border: 2px solid #ece7d0; border-radius: 0; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--hot); outline-offset: 2px; }
+
+#caption { left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); transform: translateX(-50%); width: min(560px, calc(100% - 32px)); padding: 10px 18px 12px; text-align: center; opacity: 0; transition: opacity 0.6s; pointer-events: none; background: rgba(20, 20, 18, 0.55); color: #ece7d0; border-top: 1px solid rgba(236, 231, 208, 0.5); border-bottom: 1px solid rgba(236, 231, 208, 0.5); }
+#caption.show { opacity: 1; }
+#capT { font: 600 18px/1.3 "Noto Serif SC", serif; letter-spacing: 0.1em; }
+#capD { font-size: 13px; opacity: 0.85; }
+
+#joy { left: max(24px, env(safe-area-inset-left)); bottom: max(28px, env(safe-area-inset-bottom)); width: 120px; height: 120px; border-radius: 50%; border: 2px solid rgba(236, 231, 208, 0.7); background: rgba(20, 20, 18, 0.3); display: none; touch-action: none; }
+#joy i { position: absolute; left: 50%; top: 50%; width: 48px; height: 48px; margin: -24px; border-radius: 50%; background: var(--paper); }
+@media (pointer: coarse) { body.walking #joy { display: block; } }
+
+#card { right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); width: 300px; padding: 12px 14px 14px; border-top: 4px solid var(--ink); }
+#card h3 { margin: 0 28px 8px 0; font: 600 17px/1.3 "Noto Serif SC", serif; }
+#card dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 13px; }
+#card dt { color: var(--ink2); white-space: nowrap; }
+#card dd { margin: 0; }
+#card p { margin: 8px 0 10px; font-size: 13px; line-height: 1.6; color: var(--ink2); }
+#cardClose { position: absolute; right: 8px; top: 8px; width: 28px; height: 28px; border: 1px solid var(--line); background: transparent; cursor: pointer; font-size: 16px; line-height: 1; }
+body.bare #card,
+body.bare #plate, body.bare #panel, body.bare #caption, body.bare .tool:not(#tBare) { display: none; }
+body.bare #tBare { opacity: 0.6; }
+
+#loader { position: fixed; inset: 0; z-index: 5; display: grid; place-content: center; justify-items: center; gap: 16px; padding: 0 24px; text-align: center; background: radial-gradient(ellipse at 50% 60%, #2a2c2a, #0d1012 72%); color: #d4cfb8; transition: opacity 0.9s; }
+#loader.hide { opacity: 0; pointer-events: none; }
+#loader h1 { margin: 0; font: 900 clamp(40px, 9vw, 64px)/1.05 "Noto Serif SC", serif; letter-spacing: 0.24em; text-indent: 0.24em; }
+#loader p { margin: 0; font-size: 13.5px; color: #a8a38c; }
+#bar { width: 240px; height: 4px; background: rgba(212, 207, 184, 0.2); }
+#bar i { display: block; height: 100%; width: 3%; background: #d4cfb8; transition: width 0.3s; }
+#err { position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 9; padding: 10px; font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; background: #3c0f0f; color: #ffd9d0; max-height: 40%; overflow: auto; }
+
+@media (max-width: 760px) {
+  #plate { left: 10px; top: max(10px, env(safe-area-inset-top)); gap: 10px; padding: 7px 12px 7px 10px; border-left-width: 4px; }
+  #plate h1 { font-size: 20px; }
+  #plate .sub { display: none; }
+  #clock { font-size: 18px; }
+  #tools { right: 10px; top: max(10px, env(safe-area-inset-top)); flex-direction: column; align-items: flex-end; }
+  .tool { height: 34px; padding: 0 12px; }
+  #panel { left: 10px; right: 10px; top: auto; bottom: max(10px, env(safe-area-inset-bottom)); width: auto; max-height: 58%; }
+  #caption { bottom: max(16px, env(safe-area-inset-bottom)); }
+  #card { left: 10px; right: 10px; width: auto; bottom: max(10px, env(safe-area-inset-bottom)); }
+  body.walking #caption { bottom: 170px; }
+}
+@media (prefers-reduced-motion: reduce) { #loader, #caption, #bar i { transition: none; } }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/addons/" } }
+</script>
+</head>
+<body>
+<canvas id="stage" tabindex="0" aria-label="雾港残响：三维废墟城市"></canvas>
+
+<header id="plate" class="ui paper">
+  <div><h1>雾港残响</h1><div class="sub">海岸上被藤蔓吞没的旧城</div></div>
+  <div class="read"><div id="clock">17:06</div><div id="wx">晴</div><div id="modeName">自由视角</div></div>
+</header>
+
+<nav id="tools" class="ui" aria-label="工具">
+  <button class="tool" id="bExit" type="button" hidden>自由视角</button>
+  <button class="tool" id="tSound" type="button" aria-pressed="false">声音：关</button>
+  <button class="tool" id="tPanel" type="button" aria-pressed="true">控制台</button>
+  <button class="tool" id="tBare" type="button" title="隐藏界面（H）">纯观景</button>
+</nav>
+
+<aside id="panel" class="ui paper" aria-label="控制台">
+  <section><h2>风景</h2><div id="tours"></div></section>
+  <section>
+    <h2>时间</h2>
+    <div class="row"><input id="time" type="range" min="0" max="24" step="0.01" value="17.1" aria-label="时刻"></div>
+    <div class="row" id="presets"><button class="btn" type="button" data-h="6.3">清晨</button><button class="btn" type="button" data-h="12">正午</button><button class="btn" type="button" data-h="17.4">黄昏</button><button class="btn" type="button" data-h="21.5">夜晚</button></div>
+    <div class="row"><span class="lbl">昼夜流速</span><div class="seg" id="rate"><button type="button" data-v="0">停</button><button type="button" data-v="1">1×</button><button type="button" data-v="6">6×</button><button type="button" data-v="30">30×</button></div></div>
+  </section>
+  <section>
+    <h2>天气</h2>
+    <div class="row" id="weather"><button class="btn" type="button" data-v="clear">晴</button><button class="btn" type="button" data-v="cloudy">多云</button><button class="btn" type="button" data-v="fog">雾</button><button class="btn" type="button" data-v="rain">雨</button></div>
+  </section>
+  <section>
+    <h2>镜头</h2>
+    <div class="row"><button class="btn" id="bHome" type="button">全景俯瞰</button><button class="btn" id="bWalk" type="button">街道漫游</button></div>
+    <div class="row" id="rides"><span class="lbl">搭乘</span><button class="btn" type="button" data-ride="tram">电车</button><button class="btn" type="button" data-ride="air">飞艇</button><button class="btn" type="button" data-ride="boat">渡船</button></div>
+    <div class="row"><button class="btn" id="bPause" type="button">暂停</button></div>
+  </section>
+  <section>
+    <h2>画质</h2>
+    <div class="row"><div class="seg" id="quality"><button type="button" data-v="low">流畅</button><button type="button" data-v="medium">均衡</button><button type="button" data-v="high">精致</button></div></div>
+  </section>
+</aside>
+
+<div id="caption" class="ui" role="status"><div id="capT"></div><div id="capD"></div></div>
+<div id="joy" class="ui"><i></i></div>
+
+<div id="card" class="ui paper" hidden aria-live="polite">
+  <button id="cardClose" type="button" aria-label="关闭">×</button>
+  <h3></h3>
+  <dl></dl>
+  <p></p>
+  <div class="row"><button class="btn" id="cGo" type="button">靠近看看</button><button class="btn" id="cRide" type="button" hidden>搭乘</button></div>
+</div>
+
+<div id="loader"><h1>雾港残响</h1><p id="loadMsg">正在载入…</p><div id="bar"><i></i></div></div>
+<pre id="err" hidden></pre>
+
+<script>
+addEventListener('error', function (e) { var el = document.getElementById('err'); el.hidden = false; el.textContent += (e.message || e.error) + (e.filename ? ' @ ' + e.filename.split('/').pop() + ':' + e.lineno : '') + '\n'; });
+</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
