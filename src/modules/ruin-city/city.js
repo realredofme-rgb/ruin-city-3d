@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { Builder, mat, rng, fbm, smooth, clamp, lerp } from '../../util.js';
 import { ground, shoreZ } from './terrain.js';
+import { upgradeInstanced, loadModel } from '../../models.js';
 
 /* ---------- 区域划分 ---------- */
 export const RUIN_C = new THREE.Vector2(-190, -130);
@@ -304,12 +305,13 @@ export function buildCity(scene, M) {
   const TB = Object.fromEntries(STYLES.map(k => [k, new WBuilder()]));
   const detail = new Builder(); // 阳台、楼顶水箱这类小零件：离得远时整块隐藏
   const house = new Builder(true), roofB = new Builder(), plain = new Builder(), leaf = new Builder(), metal = new Builder(), rock = new Builder(), glowB = new Builder();
-  const footprints = [], trees = [], bushes = [], lamps = [], grass = [], tops = [], beacons = [];
+  const cars = [], crates = [], footprints = [], trees = [], bushes = [], lamps = [], grass = [], tops = [], beacons = [];
   const v = new THREE.Vector3();
   const world = (m, x, y, z) => v.set(x, y, z).applyMatrix4(m).clone();
 
   /* ---------- 高楼的零件（精修） ---------- */
-  const FL = 3.5, RUST = C(0x6b4a36), RAIL = C(0x4e4640);
+  const CAR_NEAR = 150; // 废车离镜头多近用精细模型（米）
+  const FL = 3.5, RUST = C(0x6b4a36), RAIL = C(0x4e4640), CRATE = 1.4; // CRATE：货箱 GLB 的边长（米）
   /** 从断口竖着戳出来的钢筋（base = 0 朝上，π 朝下） */
   function rebar(m, base, RD) {
     metal.box(0.12, RD.range(1, 3.6), 0.12, m.multiply(mat(0, 0, 0, 0, base + RD.range(-0.6, 0.6), RD.range(-0.6, 0.6))), RUST);
@@ -571,8 +573,10 @@ export function buildCity(scene, M) {
   function car(x, y, z, yaw) {
     const c = R.pick([0x8a4b32, 0x5d6b6e, 0x9c8a5a, 0x6e3c30, 0x4a5a48]);
     const m = mat(x, y - 0.1, z, yaw, R.range(-0.1, 0.1), R.range(-0.12, 0.12));
-    metal.box(2, 0.9, 4.2, m.clone().multiply(mat(0, 0.3, 0)), C(c));
-    metal.box(1.8, 0.7, 2.2, m.clone().multiply(mat(0, 1.2, -0.2)), C(c).multiplyScalar(0.8));
+    cars.push([m, C(c)]); // 先记下位置，最后做成实例；GLB 加载好后换成外部模型
+    const last = trees.length && trees[trees.length - 1][0], lb = bushes.length && bushes[bushes.length - 1][0];
+    if (last && last.x === x && last.z === z) trees.pop(); // 同一个点上刚种的树或灌木让给车，免得从车身里戳出来
+    else if (lb && lb.x === x && lb.z === z) bushes.pop();
   }
 
   /* 沉入海湾的楼群 */
@@ -736,7 +740,15 @@ export function buildCity(scene, M) {
       plain.box(23, 0.5, 15, WL(0, 8.6, 0), C(0x8a7d6a));
       if (!LOW) for (let k = 0; k < 7; k++) {
         const bx = RD.range(-10, 10), bz = RD.range(9, 13), m2 = WL(bx, 0.5, bz).multiply(mat(0, 0, 0, RD() * 3));
-        if (RD() < 0.6) { const s = RD.range(1, 1.6); detail.box(s * 1.3, s, s, m2, C([0x8a6a48, 0x6e5a3e, 0x5a6e70, 0xa0483a][Math.floor(RD() * 4)])); if (RD() < 0.4) detail.box(s, s * 0.9, s, m2.clone().multiply(mat(0, s, 0, 0.3)), C(0x7a5e40)); }
+        { // 落到真正的地面上：岸墙顶（2.6 米）或坡地，取高的那个
+          const p = new THREE.Vector3().setFromMatrixPosition(m2), top = p.z > shoreZ(p.x) - 12 ? 2.6 : -1e9;
+          m2.elements[13] = Math.max(ground(p.x, p.z), top);
+        }
+        if (RD() < 0.6) { // 货箱：底下一只，有时上面再摞一只
+          const s = RD.range(1, 1.6), col = C([0x8a6a48, 0x6e5a3e, 0x5a6e70, 0xa0483a][Math.floor(RD() * 4)]);
+          crates.push([m2.clone().multiply(mat(0, 0, 0, 0, 0, 0, s / CRATE, s / CRATE, s / CRATE)), col]);
+          if (RD() < 0.4) crates.push([m2.clone().multiply(mat(0, s, 0, 0.3, 0, 0, 0.9 * s / CRATE, 0.9 * s / CRATE, 0.9 * s / CRATE)), C(0x7a5e40)]);
+        }
         else for (let q = 0; q < 3; q++) detail.add(new THREE.CylinderGeometry(0.4, 0.4, 1.1, 8).translate(0, 0.55, 0), m2.clone().multiply(mat(q * 0.85 - 0.85, 0, 0)), C([0x4a6a78, 0x8a3a2e, 0x6a6a5a][q]));
       }
     }
@@ -933,6 +945,42 @@ export function buildCity(scene, M) {
   for (const p of lamps) { const gy = ground(p.x, p.z); if (p.y - gy > 1.5) metal.box(0.22, p.y - gy, 0.22, mat(p.x, gy - 0.2, p.z), C(0x3e3d3a)); }
 
   /* ---------- 组装 ---------- */
+  // 废车和货箱：先用程序化的方盒子做成实例，外部 GLB 加载好后原地换掉（实例的位置朝向不变）
+  const CAR_COL = [0x8a4b32, 0x5d6b6e, 0x9c8a5a, 0x6e3c30, 0x4a5a48].map(C);
+  const instOf = (list, geo, mtl) => {
+    const im = new THREE.InstancedMesh(geo, mtl, list.length);
+    list.forEach(([m, c], i) => { im.setMatrixAt(i, m); im.setColorAt(i, c); });
+    im.castShadow = im.receiveShadow = true; im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere(); scene.add(im); return im;
+  };
+  let carLod = null;
+  if (cars.length) {
+    const B = new Builder(); B.box(2, 0.9, 4.2, mat(0, 0.3, 0), C(0xffffff)); B.box(1.8, 0.7, 2.2, mat(0, 1.2, -0.2), C(0xcccccc));
+    const geo = B.build(null).geometry, near = instOf(cars, geo, M.metal), far = instOf(cars, geo, M.metal);
+    far.count = 0;
+    // 换成 GLB 后，原来的车色只轻轻染一下（贴图本身已经有锈和褪色的漆）
+    const tint = (i, c) => c.setRGB(1, 1, 1).lerp(cars[i][1], 0.18).multiplyScalar(1.05);
+    upgradeInstanced(near, 'ruin-city/car-wreck-1', tint).then(ok => ok && loadModel('ruin-city/car-wreck-1_lod1').then(lod => {
+      // 远处的车用 LOD1 几何（和近处共用材质和贴图），每半秒按离镜头的远近重新分一次
+      far.geometry = lod.geometry; far.material = near.material;
+      const pos = cars.map(([m]) => new THREE.Vector3().setFromMatrixPosition(m)), col = cars.map((_, i) => tint(i, new THREE.Color()));
+      let lastT = -1;
+      carLod = (cam, t) => {
+        if (t - lastT < 0.5) return; lastT = t;
+        let a = 0, b = 0;
+        for (let i = 0; i < cars.length; i++) {
+          const im = pos[i].distanceToSquared(cam.position) < CAR_NEAR * CAR_NEAR ? near : far, k = im === near ? a++ : b++;
+          im.setMatrixAt(k, cars[i][0]); im.setColorAt(k, col[i]);
+        }
+        near.count = a; far.count = b;
+        for (const im of [near, far]) { im.instanceColor.needsUpdate = true; im.boundingSphere = null; }
+      };
+    }).catch(e => console.warn('车的 LOD1 没加载上，全部用 LOD0：', e.message || e)));
+  }
+  if (crates.length) {
+    const B = new Builder(); B.box(CRATE, CRATE, CRATE, null, C(0xffffff));
+    const im = instOf(crates, B.build(null).geometry, M.plain);
+    upgradeInstanced(im, 'ruin-city/dock-props-crate-1', (i, c) => c.setRGB(1, 1, 1));
+  }
   const add = (b, m, o) => { const mesh = b.build(m, o); if (mesh) scene.add(mesh); return mesh; };
   add(TB.grid, M.tower); add(TB.resi, M.towerResi); add(TB.brut, M.towerBrut);
   const detailMesh = add(detail, M.plain);
@@ -982,6 +1030,8 @@ export function buildCity(scene, M) {
   const lampCol = new THREE.Color();
   return {
     footprints, detail: detailMesh, tram: TRAM, highway: HIGHWAY, lighthouse: LH, islands, stations, tops, mast: MAST,
+    /** 按镜头远近给废车分 LOD（模块 update 里调用，cam 是平面坐标里的镜头） */
+    lod(cam, t) { if (carLod) carLod(cam, t); },
     update(t, env) {
       const L = clamp(env.lamp, 0, 1);
       U.uTime.value = t; U.uLamp.value = L * 1.02;
