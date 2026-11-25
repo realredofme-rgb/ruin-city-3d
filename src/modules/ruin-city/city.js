@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { Builder, mat, rng, fbm, smooth, clamp, lerp } from '../../util.js';
 import { ground, shoreZ } from './terrain.js';
+import { upgradeInstanced, loadModel, floraLod } from '../../models.js';
 
 /* ---------- 区域划分 ---------- */
 export const RUIN_C = new THREE.Vector2(-190, -130);
@@ -259,8 +260,13 @@ function litMat(m) {
 }
 /* 树、灌木、草丛随风摆动（越高摆得越多，每棵相位不同） */
 function swayMat() {
-  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: true });
-  m.onBeforeCompile = sh => {
+  return addSway(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: true }));
+}
+/** 风吹摇摆：越高摆得越大，每棵树的相位按位置错开（程序化的树和 GLB 的树共用） */
+function addSway(m) {
+  const prev = m.onBeforeCompile, key = m.customProgramCacheKey.bind(m);
+  m.onBeforeCompile = (sh, r) => {
+    if (prev) prev.call(m, sh, r);
     sh.uniforms.uTime = U.uTime; sh.uniforms.uWind = U.uWind;
     sh.vertexShader = 'uniform float uTime, uWind;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
       #ifdef USE_INSTANCING
@@ -273,7 +279,14 @@ function swayMat() {
       transformed.x += (sin(ph) * .7 + sin(ph * 2.7) * .25) * uWind * sw;
       transformed.z += cos(ph * .8) * .45 * uWind * sw;`);
   };
+  m.customProgramCacheKey = () => key() + '|sway';
   return m;
+}
+/** GLB 的材质克隆一份再加摇摆（同一个材质只加工一次） */
+const swayed = new Map();
+function swayGLB(m) {
+  if (!swayed.has(m)) { const c = m.clone(); c.onBeforeCompile = m.onBeforeCompile; c.customProgramCacheKey = m.customProgramCacheKey; swayed.set(m, addSway(c)); }
+  return swayed.get(m);
 }
 
 /* ---------- 树与灌木的单体几何 ---------- */
@@ -304,12 +317,13 @@ export function buildCity(scene, M) {
   const TB = Object.fromEntries(STYLES.map(k => [k, new WBuilder()]));
   const detail = new Builder(); // 阳台、楼顶水箱这类小零件：离得远时整块隐藏
   const house = new Builder(true), roofB = new Builder(), plain = new Builder(), leaf = new Builder(), metal = new Builder(), rock = new Builder(), glowB = new Builder();
-  const footprints = [], trees = [], bushes = [], lamps = [], grass = [], tops = [], beacons = [];
+  const cars = [], crates = [], footprints = [], trees = [], bushes = [], lamps = [], grass = [], tops = [], beacons = [];
   const v = new THREE.Vector3();
   const world = (m, x, y, z) => v.set(x, y, z).applyMatrix4(m).clone();
 
   /* ---------- 高楼的零件（精修） ---------- */
-  const FL = 3.5, RUST = C(0x6b4a36), RAIL = C(0x4e4640);
+  const CAR_NEAR = 150; // 废车离镜头多近用精细模型（米）
+  const FL = 3.5, RUST = C(0x6b4a36), RAIL = C(0x4e4640), CRATE = 1.4; // CRATE：货箱 GLB 的边长（米）
   /** 从断口竖着戳出来的钢筋（base = 0 朝上，π 朝下） */
   function rebar(m, base, RD) {
     metal.box(0.12, RD.range(1, 3.6), 0.12, m.multiply(mat(0, 0, 0, 0, base + RD.range(-0.6, 0.6), RD.range(-0.6, 0.6))), RUST);
@@ -571,8 +585,10 @@ export function buildCity(scene, M) {
   function car(x, y, z, yaw) {
     const c = R.pick([0x8a4b32, 0x5d6b6e, 0x9c8a5a, 0x6e3c30, 0x4a5a48]);
     const m = mat(x, y - 0.1, z, yaw, R.range(-0.1, 0.1), R.range(-0.12, 0.12));
-    metal.box(2, 0.9, 4.2, m.clone().multiply(mat(0, 0.3, 0)), C(c));
-    metal.box(1.8, 0.7, 2.2, m.clone().multiply(mat(0, 1.2, -0.2)), C(c).multiplyScalar(0.8));
+    cars.push([m, C(c)]); // 先记下位置，最后做成实例；GLB 加载好后换成外部模型
+    const last = trees.length && trees[trees.length - 1][0], lb = bushes.length && bushes[bushes.length - 1][0];
+    if (last && last.x === x && last.z === z) trees.pop(); // 同一个点上刚种的树或灌木让给车，免得从车身里戳出来
+    else if (lb && lb.x === x && lb.z === z) bushes.pop();
   }
 
   /* 沉入海湾的楼群 */
@@ -736,7 +752,15 @@ export function buildCity(scene, M) {
       plain.box(23, 0.5, 15, WL(0, 8.6, 0), C(0x8a7d6a));
       if (!LOW) for (let k = 0; k < 7; k++) {
         const bx = RD.range(-10, 10), bz = RD.range(9, 13), m2 = WL(bx, 0.5, bz).multiply(mat(0, 0, 0, RD() * 3));
-        if (RD() < 0.6) { const s = RD.range(1, 1.6); detail.box(s * 1.3, s, s, m2, C([0x8a6a48, 0x6e5a3e, 0x5a6e70, 0xa0483a][Math.floor(RD() * 4)])); if (RD() < 0.4) detail.box(s, s * 0.9, s, m2.clone().multiply(mat(0, s, 0, 0.3)), C(0x7a5e40)); }
+        { // 落到真正的地面上：岸墙顶（2.6 米）或坡地，取高的那个
+          const p = new THREE.Vector3().setFromMatrixPosition(m2), top = p.z > shoreZ(p.x) - 12 ? 2.6 : -1e9;
+          m2.elements[13] = Math.max(ground(p.x, p.z), top);
+        }
+        if (RD() < 0.6) { // 货箱：底下一只，有时上面再摞一只
+          const s = RD.range(1, 1.6), col = C([0x8a6a48, 0x6e5a3e, 0x5a6e70, 0xa0483a][Math.floor(RD() * 4)]);
+          crates.push([m2.clone().multiply(mat(0, 0, 0, 0, 0, 0, s / CRATE, s / CRATE, s / CRATE)), col]);
+          if (RD() < 0.4) crates.push([m2.clone().multiply(mat(0, s, 0, 0.3, 0, 0, 0.9 * s / CRATE, 0.9 * s / CRATE, 0.9 * s / CRATE)), C(0x7a5e40)]);
+        }
         else for (let q = 0; q < 3; q++) detail.add(new THREE.CylinderGeometry(0.4, 0.4, 1.1, 8).translate(0, 0.55, 0), m2.clone().multiply(mat(q * 0.85 - 0.85, 0, 0)), C([0x4a6a78, 0x8a3a2e, 0x6a6a5a][q]));
       }
     }
@@ -933,25 +957,75 @@ export function buildCity(scene, M) {
   for (const p of lamps) { const gy = ground(p.x, p.z); if (p.y - gy > 1.5) metal.box(0.22, p.y - gy, 0.22, mat(p.x, gy - 0.2, p.z), C(0x3e3d3a)); }
 
   /* ---------- 组装 ---------- */
+  // 废车和货箱：先用程序化的方盒子做成实例，外部 GLB 加载好后原地换掉（实例的位置朝向不变）
+  const CAR_COL = [0x8a4b32, 0x5d6b6e, 0x9c8a5a, 0x6e3c30, 0x4a5a48].map(C);
+  const instOf = (list, geo, mtl) => {
+    const im = new THREE.InstancedMesh(geo, mtl, list.length);
+    list.forEach(([m, c], i) => { im.setMatrixAt(i, m); im.setColorAt(i, c); });
+    im.castShadow = im.receiveShadow = true; im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere(); scene.add(im); return im;
+  };
+  let carLod = null;
+  if (cars.length) {
+    const B = new Builder(); B.box(2, 0.9, 4.2, mat(0, 0.3, 0), C(0xffffff)); B.box(1.8, 0.7, 2.2, mat(0, 1.2, -0.2), C(0xcccccc));
+    const geo = B.build(null).geometry, near = instOf(cars, geo, M.metal), far = instOf(cars, geo, M.metal);
+    far.count = 0;
+    // 换成 GLB 后，原来的车色只轻轻染一下（贴图本身已经有锈和褪色的漆）
+    const tint = (i, c) => c.setRGB(1, 1, 1).lerp(cars[i][1], 0.18).multiplyScalar(1.05);
+    upgradeInstanced(near, 'ruin-city/car-wreck-1', tint).then(ok => ok && loadModel('ruin-city/car-wreck-1_lod1').then(lod => {
+      // 远处的车用 LOD1 几何（和近处共用材质和贴图），每半秒按离镜头的远近重新分一次
+      far.geometry = lod.geometry; far.material = near.material;
+      const pos = cars.map(([m]) => new THREE.Vector3().setFromMatrixPosition(m)), col = cars.map((_, i) => tint(i, new THREE.Color()));
+      let lastT = -1;
+      carLod = (cam, t) => {
+        if (t - lastT < 0.5) return; lastT = t;
+        let a = 0, b = 0;
+        for (let i = 0; i < cars.length; i++) {
+          const im = pos[i].distanceToSquared(cam.position) < CAR_NEAR * CAR_NEAR ? near : far, k = im === near ? a++ : b++;
+          im.setMatrixAt(k, cars[i][0]); im.setColorAt(k, col[i]);
+        }
+        near.count = a; far.count = b;
+        for (const im of [near, far]) { im.instanceColor.needsUpdate = true; im.boundingSphere = null; }
+      };
+    }).catch(e => console.warn('车的 LOD1 没加载上，全部用 LOD0：', e.message || e)));
+  }
+  if (crates.length) {
+    const B = new Builder(); B.box(CRATE, CRATE, CRATE, null, C(0xffffff));
+    const im = instOf(crates, B.build(null).geometry, M.plain);
+    upgradeInstanced(im, 'ruin-city/dock-props-crate-1', (i, c) => c.setRGB(1, 1, 1));
+  }
   const add = (b, m, o) => { const mesh = b.build(m, o); if (mesh) scene.add(mesh); return mesh; };
   add(TB.grid, M.tower); add(TB.resi, M.towerResi); add(TB.brut, M.towerBrut);
   const detailMesh = add(detail, M.plain);
   add(house, M.house); add(roofB, M.roof); add(plain, M.plain); add(leaf, M.leaf); add(metal, M.metal); add(rock, M.rock);
   add(glowB, M.glow, { cast: false, receive: false });
 
-  // 树（实例化；浮空岛上的树挂到岛的组里）
+  // 树和灌木（实例化）：近处换成 GLB（LOD0 / LOD1），远处保留程序化的低模；浮空岛上的几棵树挂在岛的组里，仍用低模
   const tg = { oak: treeGeo('oak'), pine: treeGeo('pine') }, dummy = new THREE.Object3D(), tc = new THREE.Color();
+  // GLB 自带贴图颜色，只按占位颜色的明暗轻轻染一下
+  const glbTint = (c, lo, hi) => { const h = {}; c.getHSL(h); return new THREE.Color().setScalar(0.82 + clamp((h.l - lo) / (hi - lo), 0, 1) * 0.3); };
+  const FLORA = LOW ? { near: 0, mid: 140 } : { near: 70, mid: 280 };
+  const flora = [];
   for (const kind of ['oak', 'pine']) {
     const list = trees.filter(t => t[2] === kind && !t[3]);
-    const im = new THREE.InstancedMesh(tg[kind], M.tree, list.length);
-    list.forEach((t, i) => { dummy.position.copy(t[0]); dummy.rotation.set(0, R() * 6.28, 0); dummy.scale.setScalar(t[1]); dummy.updateMatrix(); im.setMatrixAt(i, dummy.matrix); im.setColorAt(i, tc.setHSL(0.22 + R.range(-0.04, 0.05), 0.35, R.range(0.42, 0.6)).multiplyScalar(1.9)); });
-    im.userData.flora = true; im.castShadow = true; im.receiveShadow = true; im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; im.computeBoundingSphere(); scene.add(im);
+    const items = list.map(t => {
+      dummy.position.copy(t[0]); dummy.rotation.set(0, R() * 6.28, 0); dummy.scale.setScalar(t[1]); dummy.updateMatrix();
+      const c = tc.setHSL(0.22 + R.range(-0.04, 0.05), 0.35, R.range(0.42, 0.6)).clone(), g = glbTint(c, 0.42, 0.6);
+      return { m: dummy.matrix.clone(), c: c.multiplyScalar(kind === 'pine' ? 1.45 : 1.9), g }; // 远处的低模松树压暗一点，和近处 GLB 松树的深绿接得上
+    });
+    const variants = kind === 'oak' ? [1, 2, 3].map(k => `ruin-city/tree-oak-${k}`) : [1, 2].map(k => `ruin-city/tree-pine-${k}`);
+    flora.push(floraLod(scene, items, { geometry: tg[kind], material: M.tree }, variants, { ...FLORA, prep: swayGLB, flags: { flora: true } }));
   }
   for (const t of trees.filter(t => t[3])) { const m = new THREE.Mesh(tg.oak, M.tree); m.position.copy(t[4]); m.scale.setScalar(t[1]); m.castShadow = true; t[3].add(m); }
-  {
-    const im = new THREE.InstancedMesh(bushGeo(), M.tree, bushes.length);
-    bushes.forEach(([p, s], i) => { dummy.position.copy(p); dummy.rotation.set(R(), R() * 6, R()); dummy.scale.set(s * R.range(1, 1.6), s * R.range(0.6, 1), s * R.range(1, 1.6)); dummy.updateMatrix(); im.setMatrixAt(i, dummy.matrix); im.setColorAt(i, tc.setHSL(0.23 + R.range(-0.05, 0.04), 0.4, R.range(0.38, 0.55)).multiplyScalar(1.6)); });
-    im.userData.flora = true; im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); scene.add(im);
+  if (bushes.length) {
+    const items = bushes.map(([p, s]) => {
+      // 立着长，只轻微歪一点（GLB 灌木有明确的上下）；占位是个以 p 为中心的球，GLB 的根在底面，往下埋一点
+      dummy.position.copy(p); dummy.rotation.set((R() - 0.5) * 0.3, R() * 6, (R() - 0.5) * 0.3); dummy.scale.set(s * R.range(1, 1.6), s * R.range(0.6, 1), s * R.range(1, 1.6)); dummy.updateMatrix();
+      const m = dummy.matrix.clone(), mg = m.clone().multiply(new THREE.Matrix4().makeTranslation(0, -0.3, 0)).multiply(new THREE.Matrix4().makeScale(1, 1.4, 1)); // GLB 灌木偏扁，拉高一点
+      const c = tc.setHSL(0.23 + R.range(-0.05, 0.04), 0.4, R.range(0.38, 0.55)).clone(), g = glbTint(c, 0.38, 0.55);
+      return { m, mg, c: c.multiplyScalar(1.6), g };
+    });
+    const near = FLORA.near && 45, mid = FLORA.mid * 0.6;
+    flora.push(floraLod(scene, items, { geometry: bushGeo(), material: M.tree }, ['ruin-city/shrub-1', 'ruin-city/shrub-2'], { near, mid, prep: swayGLB, flags: { flora: true } }));
   }
   {
     const im = new THREE.InstancedMesh(grassGeo(), M.tree, grass.length);
@@ -982,6 +1056,8 @@ export function buildCity(scene, M) {
   const lampCol = new THREE.Color();
   return {
     footprints, detail: detailMesh, tram: TRAM, highway: HIGHWAY, lighthouse: LH, islands, stations, tops, mast: MAST,
+    /** 按镜头远近给废车分 LOD（模块 update 里调用，cam 是平面坐标里的镜头） */
+    lod(cam, t) { if (carLod) carLod(cam, t); for (const f of flora) f.update(cam.position); },
     update(t, env) {
       const L = clamp(env.lamp, 0, 1);
       U.uTime.value = t; U.uLamp.value = L * 1.02;

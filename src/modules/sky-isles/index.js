@@ -4,11 +4,14 @@
 import * as THREE from 'three';
 import { smooth, clamp, lerp, rng } from '../../util.js';
 import { height, color, plateauMask, abyssR, outerR, strata, nz, CLOUD_Y, PLATEAU } from './terrain.js';
-import { makeIsland, ruinsTemple, ruinsArch, ruinsTower, crystalCluster, SHARED } from './isles.js';
+import { makeIsland, ruinsTemple, ruinsArch, ruinsTower, crystalCluster, SHARED, TREE_GLB, FLORA_Q, glbTint } from './isles.js';
 import { Links, fixed, onIsle } from './links.js';
 import { makeSkySea, fallMaterial, fallGeo } from './clouds.js';
 import { Pack, at } from './geo.js';
+import { floraLod } from '../../models.js';
 import { TOURS, HOME } from './tours.js';
+
+const _cl = new THREE.Vector3();
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const CORE = { x0: -2000, x1: 2000, z0: -2000, z1: 2000 };
@@ -238,10 +241,11 @@ export default {
       ptrees[f > 0.5 || R() < 0.7 ? 'pine' : 'oak'].push([px, height(px, pz) - 0.4, pz, R.range(1.1, 2.1)]);
     }
     for (const t of tops) for (let k = 0; k < Math.round(t.rad / 5); k++) { const a = R() * 6.28, rr = Math.sqrt(R()) * t.rad * 0.7; ptrees.pine.push([t.x + Math.cos(a) * rr, t.y + t.rad * 0.12, t.z + Math.sin(a) * rr, R.range(0.6, 1.3)]); }
+    const plateauFlora = [];
     for (const k of ['pine', 'oak']) {
-      const list = ptrees[k], im = new THREE.InstancedMesh(shared2[k], M.tree, list.length), c = new THREE.Color();
-      list.forEach(([x, y, z, s], i) => { d.position.set(x, y, z); d.rotation.set(R.range(-0.06, 0.06), R() * 6.28, R.range(-0.06, 0.06)); d.scale.set(s, s * R.range(0.85, 1.3), s); d.updateMatrix(); im.setMatrixAt(i, d.matrix); im.setColorAt(i, c.setHSL(0.24 + R.range(-0.04, 0.05), 0.3, R.range(0.4, 0.58)).multiplyScalar(1.8)); });
-      im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); root.add(im);
+      const c = new THREE.Color();
+      const items = ptrees[k].map(([x, y, z, s]) => { d.position.set(x, y, z); d.rotation.set(R.range(-0.06, 0.06), R() * 6.28, R.range(-0.06, 0.06)); d.scale.set(s, s * R.range(0.85, 1.3), s); d.updateMatrix(); c.setHSL(0.24 + R.range(-0.04, 0.05), 0.3, R.range(0.4, 0.58)); return { m: d.matrix.clone(), c: c.clone().multiplyScalar(1.8), g: glbTint(c, 0.4, 0.58) }; });
+      plateauFlora.push(floraLod(root, items, { geometry: shared2[k], material: M.tree }, TREE_GLB[k], FLORA_Q));
     }
     const ruins = new Pack();
     for (let k = 0; k < 9; k++) {
@@ -311,8 +315,14 @@ export default {
     let frame = 0;
     return {
       isles, links, sea, lights,
-      update(dt, t, env) {
+      update(dt, t, env, camLocal) {
         const night = env.night;
+        // 树的远近分级：台地上的按模块坐标，浮岛上的按岛的位置（岛只轻轻摇，不计转动）
+        if (camLocal) {
+          const cp = camLocal.position;
+          for (const f of plateauFlora) f.update(cp);
+          for (const I of isles) if (I.flora.length) { _cl.copy(cp).sub(I.g.position); for (const f of I.flora) f.update(_cl); }
+        }
         // 岛：缓慢上下浮动、轻微摇摆
         for (const I of isles) {
           const u = I.g.userData; I.g.position.y = u.base + Math.sin(t * 0.22 + u.ph) * u.amp;

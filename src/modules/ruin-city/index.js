@@ -42,6 +42,7 @@ export default {
         city.update(t, env);
         // 阳台、水箱这些小零件只在近处画（城市核心区约 1.3 公里宽）
         if (city.detail) city.detail.visible = camLocal.position.length() < 2600;
+        city.lod(camLocal, t);
         U.uWind.value = env.wind;
         life.update(dt, t, env, speed, camLocal);
         motes.material.uniforms.uTime.value = t; motes.material.uniforms.uNight.value = env.night;
