@@ -76,11 +76,39 @@ export class Mount {
     }
     if (o.parent && !meshes.includes(o)) o.parent.remove(o);
   }
+  /**
+   * InstancedMesh：模块照常用平面坐标 setMatrixAt，这里记下平面矩阵（getFlatMatrixAt 可读回），
+   * 真正的 instanceMatrix 存弯到球面后的矩阵。getMatrixAt 保持 three.js 的原意，返回球面上的矩阵，
+   * 所以包围球、视锥裁剪和点击拾取都按实例真实所在的位置算。
+   * InstancedMesh 自身若有位置或旋转，在挂载时并进每个实例里（之后再改它自身的变换不会生效）。
+   */
   hookInstanced(im) {
-    const flat = new Float32Array(im.instanceMatrix.array), rec = { im, flat, dirty: true };
+    im.updateMatrix();
+    const pre = isIdentity(im.matrix) ? null : im.matrix.clone();
+    if (pre) { im.position.set(0, 0, 0); im.quaternion.identity(); im.scale.set(1, 1, 1); im.updateMatrix(); }
+    im.matrixAutoUpdate = false;
+    const flat = new Float32Array(im.instanceMatrix.array), rec = { im, flat, pre, dirty: true };
+    const get = THREE.InstancedMesh.prototype.getMatrixAt;
     im.setMatrixAt = (i, m) => { m.toArray(flat, i * 16); rec.dirty = true; };
-    im.getMatrixAt = (i, m) => m.fromArray(flat, i * 16);
+    im.getFlatMatrixAt = (i, m) => m.fromArray(flat, i * 16);
+    im.getMatrixAt = (i, m) => { if (rec.dirty) this.bendInstances(rec); return get.call(im, i, m); };
     this.inst.push(rec);
+  }
+  bendInstances(r) {
+    r.dirty = false;
+    const F = this.frame, a = r.im.instanceMatrix.array, f = r.flat, n = r.im.count;
+    for (let i = 0; i < n; i++) {
+      const k = i * 16;
+      _m.fromArray(f, k); if (r.pre) _m.premultiply(r.pre);
+      const e = _m.elements, x = e[12], y = e[13], z = e[14];
+      e[12] = e[13] = e[14] = 0;
+      _m2.makeRotationFromQuaternion(F.quatAt(x, z, _q)).multiply(_m);
+      F.toWorld(x, y, z, _p); _m2.elements[12] = _p.x; _m2.elements[13] = _p.y; _m2.elements[14] = _p.z;
+      _m2.toArray(a, k);
+    }
+    r.im.instanceMatrix.needsUpdate = true;
+    // 实例搬到了球面上，旧的包围体作废；下一次视锥裁剪或拾取时 three.js 会按新矩阵重算
+    r.im.boundingSphere = null; r.im.boundingBox = null;
   }
   gpuBend(o) {
     const mat = o.material;
@@ -91,20 +119,7 @@ export class Mount {
   /** 每帧在模块更新之后调用 */
   sync() {
     for (const o of this.rigid) this.place(o);
-    const F = this.frame;
-    for (const r of this.inst) {
-      if (!r.dirty) continue; r.dirty = false;
-      const a = r.im.instanceMatrix.array, f = r.flat, n = r.im.count;
-      for (let i = 0; i < n; i++) {
-        const k = i * 16, x = f[k + 12], y = f[k + 13], z = f[k + 14];
-        _m.fromArray(f, k); _m.elements[12] = _m.elements[13] = _m.elements[14] = 0;
-        _m2.makeRotationFromQuaternion(F.quatAt(x, z, _q)).multiply(_m);
-        F.toWorld(x, y, z, _p); _m2.elements[12] = _p.x; _m2.elements[13] = _p.y; _m2.elements[14] = _p.z;
-        _m2.toArray(a, k);
-      }
-      r.im.instanceMatrix.needsUpdate = true;
-      if (r.im.frustumCulled) { r.im.computeBoundingSphere(); r.im.boundingBox = null; }
-    }
+    for (const r of this.inst) if (r.dirty) this.bendInstances(r);
   }
   /** 世界中的相机 → 一个带平面位置与朝向的代理（给模块里用距离、方位的逻辑） */
   localCamera(cam, proxy) {
