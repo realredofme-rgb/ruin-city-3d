@@ -11,7 +11,7 @@ import m2 from './gobi-rift/index.js';
 
 import m3 from './sunken-wetland/index.js';
 
-import { isles as m4 } from './placeholders.js';
+import m4 from './sky-isles/index.js';
 
 import m5 from './volcano-forge/index.js';
 
