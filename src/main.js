@@ -85,12 +85,13 @@ async function start() {
 
   /* ---------- 界面 ---------- */
   function setOn(sel, v) { document.querySelectorAll(sel + ' [data-v]').forEach(b => b.classList.toggle('on', b.dataset.v === String(v))); }
-  const TOURS = [{ id: 'planet', planet: true, name: '环星巡游', desc: '在高空绕星球一圈，看晨昏线扫过一块块地', dur: 999 }, ...city.tours];
+  const TOURS = [{ id: 'planet', planet: true, name: '环星巡游', desc: '在高空绕星球一圈，看晨昏线扫过一块块地', dur: 999 }, ...MODULES.flatMap(m => (m.status === 'built' && m.tours || []).map(t => ({ ...t, mod: m })))];
   $('#tours').innerHTML = TOURS.map(t => `<button class="tour" type="button" data-tour="${t.id}"><b>${t.name}</b><span>${t.desc}</span></button>`).join('');
   document.querySelectorAll('#tours .tour').forEach(b => b.onclick = () => {
     const t = TOURS.find(x => x.id === b.dataset.tour);
-    if (!t.planet) { climate.setLocalHour(city.tile.c, t.hour); climate.pin(city.tile.c, t.weather); cityEnv.at(city.tile.c, true); setOn('#weather', t.weather); }
-    rig.startTour(t, city);
+    const tm = t.mod || city;
+    if (!t.planet) { climate.setLocalHour(tm.tile.c, t.hour); climate.pin(tm.tile.c, t.weather); envs.get(tm).at(tm.tile.c, true); setOn('#weather', t.weather); }
+    rig.startTour(t, tm);
     caption(t.name, t.desc);
     document.querySelectorAll('#tours .tour').forEach(x => x.classList.toggle('on', x === b));
     if (innerWidth < 760) togglePanel(false);
