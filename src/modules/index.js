@@ -15,7 +15,7 @@ import { isles as m4 } from './placeholders.js';
 
 import { volcano as m5 } from './placeholders.js';
 
-import { ice as m6 } from './placeholders.js';
+import m6 from './ice-wreck/index.js';
 
 import m7 from './salt-mirror/index.js';
 
