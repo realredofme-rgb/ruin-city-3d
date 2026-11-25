@@ -25,7 +25,7 @@ export function buildIce(root, U) {
       d.position.set(x, ground(x, z) - s * sink, z); d.rotation.set(rx, ry, rz); d.scale.set(s, s * sy, s * (0.7 + R() * 0.6)); d.updateMatrix();
       im.setMatrixAt(i, d.matrix); im.setColorAt(i, c.copy(white).lerp(blue, b));
     });
-    im.castShadow = true; im.receiveShadow = true; im.frustumCulled = false; root.add(im); out.push(im);
+    im.castShadow = true; im.receiveShadow = true; root.add(im); out.push(im);
   };
   const blocks = [], shards = [];
   // 舰首前方弧形的压力脊

@@ -314,7 +314,7 @@ function scatterDebris(root, R) {
     c.copy(R() < 0.7 ? PAL.bone : R() < 0.5 ? PAL.grey : PAL.red).lerp(PAL.soot, R() * 0.6).lerp(C(0xeef2f5), R() * 0.35);
     im.setColorAt(n, c); n++;
   }
-  im.castShadow = true; im.receiveShadow = true; im.frustumCulled = false; root.add(im);   // 挂载层改写了 getMatrixAt，自带的包围球会算错，干脆不裁剪
+  im.castShadow = true; im.receiveShadow = true; root.add(im);
 
   // 货柜：从中段货舱里滑出来的一串
   const cg = new THREE.BoxGeometry(14, 6, 6), cm = new THREE.MeshStandardMaterial({ roughness: 0.7, metalness: 0.3 });
@@ -324,6 +324,6 @@ function scatterDebris(root, R) {
     d.position.set(x, ground(x, z) + 1.5 + (R() < 0.2 ? 6 : 0), z); d.rotation.set(R.range(-0.25, 0.25), R() * 6.28, R.range(-0.3, 0.3)); d.scale.set(1, 1, 1); d.updateMatrix();
     ci.setMatrixAt(i, d.matrix); ci.setColorAt(i, c.copy(R.pick(cols)).lerp(C(0xeef2f5), R() * 0.25));
   }
-  ci.castShadow = true; ci.receiveShadow = true; ci.frustumCulled = false; root.add(ci);
+  ci.castShadow = true; ci.receiveShadow = true; root.add(ci);
   return { im, ci };
 }

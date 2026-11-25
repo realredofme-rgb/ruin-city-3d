@@ -186,3 +186,4 @@ const salt = {
 };
 
 export const PLACEHOLDERS = [rift, wetland, isles, volcano, ice, salt];
+export { rift, wetland, isles, volcano, ice, salt };

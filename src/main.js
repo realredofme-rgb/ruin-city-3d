@@ -85,12 +85,19 @@ async function start() {
 
   /* ---------- 界面 ---------- */
   function setOn(sel, v) { document.querySelectorAll(sel + ' [data-v]').forEach(b => b.classList.toggle('on', b.dataset.v === String(v))); }
-  const TOURS = [{ id: 'planet', planet: true, name: '环星巡游', desc: '在高空绕星球一圈，看晨昏线扫过一块块地', dur: 999 }, ...city.tours];
-  $('#tours').innerHTML = TOURS.map(t => `<button class="tour" type="button" data-tour="${t.id}"><b>${t.name}</b><span>${t.desc}</span></button>`).join('');
+  // 风景：环星巡游 + 每个模块自带的巡游（t.mod 记住属于哪块地，时间和天气按那块地来设）
+  const TOURS = [{ id: 'planet', planet: true, name: '环星巡游', desc: '在高空绕星球一圈，看晨昏线扫过一块块地', dur: 999 },
+    ...MODULES.flatMap(m => (m.tours || []).map(t => ({ ...t, id: m.id + ':' + t.id, mod: m })))];
+  $('#tours').innerHTML = TOURS.map(t => `<button class="tour" type="button" data-tour="${t.id}"><b>${t.name}</b><span>${t.mod && t.mod !== city ? t.mod.name + ' · ' : ''}${t.desc}</span></button>`).join('');
   document.querySelectorAll('#tours .tour').forEach(b => b.onclick = () => {
     const t = TOURS.find(x => x.id === b.dataset.tour);
-    if (!t.planet) { climate.setLocalHour(city.tile.c, t.hour); climate.pin(city.tile.c, t.weather); cityEnv.at(city.tile.c, true); setOn('#weather', t.weather); }
-    rig.startTour(t, city);
+    if (!t.planet) {
+      const c = t.mod.tile.c;
+      if (t.hour != null) climate.setLocalHour(c, t.hour);
+      if (t.weather) { climate.pin(c, t.weather); setOn('#weather', t.weather); }
+      envs.get(t.mod).at(c, true);
+    }
+    rig.startTour(t, t.mod);
     caption(t.name, t.desc);
     document.querySelectorAll('#tours .tour').forEach(x => x.classList.toggle('on', x === b));
     if (innerWidth < 760) togglePanel(false);
@@ -213,12 +220,14 @@ async function start() {
   rig.go({ f: city.tile.c.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.35), dist: R * 3.4, tilt: 0, h: 0 }, { fly: false });
   const clock = new THREE.Clock(); let t = 0, hudT = 0;
   const shadowAt = new THREE.Vector3(), fwd = new THREE.Vector3();
-  const ctx = { envOf: m => envs.get(m), camOf: m => m === city ? camProxy : null, speed: 1, sun: climate.sun, cam: camera };
+  // 每个模块都拿到镜头在自己平面坐标里的代理（城市沿用 camProxy）
+  const camProxies = new Map(MODULES.map(m => [m, m === city ? camProxy : new THREE.Object3D()]));
+  const ctx = { envOf: m => envs.get(m), camOf: m => camProxies.get(m), speed: 1, sun: climate.sun, cam: camera };
   function loop() {
     const dt = Math.min(clock.getDelta(), 0.1);
     if (!S.paused) { t += dt; climate.update(dt * S.rate / 60); }
     for (const e of envs.values()) e.update(dt);
-    city.mount.localCamera(camera, camProxy);
+    for (const [m, p] of camProxies) m.mount.localCamera(camera, p);
     planet.update(S.paused ? 0 : dt, t, ctx);
     for (const e of C.life.events) {
       audio.event(e);
