@@ -1,6 +1,6 @@
-// 点击城市里的东西：建筑、地标、车船飞艇、小机械，弹出信息卡并高亮
+// 点击城市里的东西：建筑、地标、车船飞艇、小机械，弹出信息卡并高亮（信息卡也给星球上的地块用）
 import * as THREE from 'three';
-import { ground } from './world.js';
+import { ground } from './terrain.js';
 import { insideFoot, TOWER, FERRIS, PLAZA, HIGHWAY } from './city.js';
 
 const RUIN_NOTES = [
@@ -16,8 +16,12 @@ const HOUSE_NOTES = ['窗台上摆着一排风干的鱼。', '门口的信箱塞
 const CARGO = ['渔获', '茶叶', '旧机械零件', '灯油', '帆布与缆绳', '从废墟里拾回的铜线'];
 
 export class Picker {
-  constructor({ camera, dom, scene, city, life, rig, env, onRide }) {
-    Object.assign(this, { camera, dom, scene, city, life, rig, env, onRide });
+  /**
+   * scene：模块的 root；frame：模块的地块坐标系（命中点要先换回平面坐标）
+   * flyTo(平面点, 距离)；canPick() 为 false 时（镜头在星球尺度）改走 onMiss
+   */
+  constructor({ camera, dom, scene, city, life, rig, env, onRide, frame, flyTo, canPick, onMiss }) {
+    Object.assign(this, { camera, dom, scene, city, life, rig, env, onRide, frame, flyTo, canPick, onMiss });
     this.ray = new THREE.Raycaster(); this.ray.far = 4000;
     this.card = document.getElementById('card'); this.sel = null;
     this.box = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)), new THREE.LineBasicMaterial({ color: 0xffd08a, transparent: true, opacity: 0.9, depthTest: false }));
@@ -33,14 +37,15 @@ export class Picker {
   }
   targets() { return this.scene.children.filter(o => (o.isMesh || o.isGroup || o.isInstancedMesh) && !o.userData.noPick); }
   pick(cx, cy) {
+    if (!this.canPick()) return this.onMiss(cx, cy);
     const r = this.dom.getBoundingClientRect();
     this.ray.setFromCamera(new THREE.Vector2((cx - r.left) / r.width * 2 - 1, -(cy - r.top) / r.height * 2 + 1), this.camera);
     const hits = this.ray.intersectObjects(this.targets(), true);
-    for (const h of hits) { const info = this.identify(h); if (info) return this.show(info); }
-    this.close();
+    for (const h of hits) { if (h.object.userData.noPick) continue; const info = this.identify(h); if (info) return this.show(info); }
+    this.onMiss(cx, cy);
   }
   identify(hit) {
-    const p = hit.point, { city, life } = this;
+    const p = this.frame.toLocal(hit.point), { city, life } = this;
     for (let o = hit.object; o; o = o.parent) {
       const pk = life.pickables.find(q => q.obj === o);
       if (pk) return this.moverInfo(pk);
@@ -98,24 +103,39 @@ export class Picker {
     const n = c.querySelector('p'); n.textContent = info.note || ''; n.hidden = !info.note;
     const bRide = document.getElementById('cRide'); bRide.hidden = !info.ride;
     bRide.onclick = () => { this.onRide(info.ride, info.obj); this.close(); };
-    document.getElementById('cGo').onclick = () => this.rig.flyTo(info.obj ? info.obj.position.clone() : info.focus, info.dist);
+    const go = document.getElementById('cGo'); go.textContent = info.goLabel || '靠近看看';
+    go.onclick = () => info.go ? info.go() : this.flyTo(info.obj ? info.obj.position.clone() : info.focus, info.dist);
     c.hidden = false;
     if (info.f) {
       const f = info.f, gy = ground(f.x, f.z);
       this.box.scale.set(f.hx * 2, info.h || 10, f.hz * 2); this.box.position.set(f.x, gy + (info.h || 10) / 2, f.z); this.box.rotation.set(0, Math.atan2(f.s, f.c), 0);
       this.box.visible = true; this.follow = null;
-    } else if (info.obj) { this.follow = info.obj; this.box.visible = true; }
+    } else if (info.obj) { this.follow = info.obj; this.followBox = localBox(info.obj); this.box.visible = true; }
     else this.box.visible = false;
   }
   close() { this.card.hidden = true; this.box.visible = false; this.follow = null; this.sel = null; }
   update() {
-    if (this.follow) {
-      const b = new THREE.Box3().setFromObject(this.follow), s = b.getSize(new THREE.Vector3());
-      b.getCenter(this.box.position); this.box.scale.copy(s.addScalar(0.6)); this.box.rotation.set(0, 0, 0);
+    if (this.follow) { // 框跟着物件走：在物件自身坐标里量好的包围盒，按它的平面位置与朝向摆放
+      const o = this.follow, b = this.followBox, c = b.getCenter(new THREE.Vector3()).multiply(o.scale).applyQuaternion(o.quaternion);
+      this.box.position.copy(o.position).add(c); this.box.quaternion.copy(o.quaternion);
+      this.box.scale.copy(b.getSize(new THREE.Vector3()).multiply(o.scale).addScalar(0.6));
     }
     if (this.sel && this.sel.obj && !this.card.hidden && (this._t = (this._t || 0) + 1) % 15 === 0) {
       const info = this.moverInfo(this.life.pickables.find(q => q.obj === this.sel.obj));
       const dds = this.card.querySelectorAll('dd'); info.rows.forEach((r, i) => { if (dds[i]) dds[i].textContent = r[1]; });
     }
   }
+}
+
+/** 物件在自身坐标系里的包围盒（不含它自己的位置、朝向、缩放） */
+function localBox(obj) {
+  const box = new THREE.Box3(), m = new THREE.Matrix4(), b = new THREE.Box3();
+  obj.traverse(o => {
+    if (!o.geometry || o === obj && !o.geometry) return;
+    m.identity(); const chain = []; for (let p = o; p && p !== obj; p = p.parent) chain.push(p);
+    for (let i = chain.length - 1; i >= 0; i--) { chain[i].updateMatrix(); m.multiply(chain[i].matrix); }
+    if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+    box.union(b.copy(o.geometry.boundingBox).applyMatrix4(m));
+  });
+  return box;
 }

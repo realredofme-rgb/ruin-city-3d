@@ -1,7 +1,7 @@
 // 城市：断裂的高楼废墟、高架残桥、摩天轮、沉没楼群、雾港老城、码头与灯塔、白塔与浮空岛
 import * as THREE from 'three';
-import { Builder, mat, rng, fbm, smooth, clamp, lerp, wallTextures } from './util.js';
-import { ground, shoreZ } from './world.js';
+import { Builder, mat, rng, fbm, smooth, clamp, lerp, wallTextures } from '../../util.js';
+import { ground, shoreZ } from './terrain.js';
 
 /* ---------- 区域划分 ---------- */
 export const RUIN_C = new THREE.Vector2(-190, -130);
