@@ -2,6 +2,8 @@
 // 新模块按 src/modules/README.md 的接口写好后，替换掉 placeholders.js 里对应的那一项即可。
 import city from './ruin-city/index.js';
 import { PLACEHOLDERS } from './placeholders.js';
+import iceWreck from './ice-wreck/index.js';
 
-export const MODULES = [city, ...PLACEHOLDERS].sort((a, b) => a.no - b.no);
+const BUILT = [city, iceWreck];
+export const MODULES = [...BUILT, ...PLACEHOLDERS.filter(p => !BUILT.some(m => m.id === p.id))].sort((a, b) => a.no - b.no);
 export const ROUTE = ['ruin-city', 'sunken-wetland', 'sky-isles', 'volcano-forge', 'ice-wreck', 'salt-mirror', 'gobi-rift'];
