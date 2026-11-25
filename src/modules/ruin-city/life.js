@@ -1,7 +1,7 @@
 // 城里还在动的东西：电车与乘客、行人、渡船、飞艇、鸟群、废墟里的小机械、落石
 import * as THREE from 'three';
-import { rng, clamp, smooth, lerp, dotTexture } from './util.js';
-import { ground, shoreZ } from './world.js';
+import { rng, clamp, smooth, lerp, dotTexture } from '../../util.js';
+import { ground, shoreZ } from './terrain.js';
 import { ruinMask, insideFoot } from './city.js';
 
 const std = (c, o = {}) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.7, ...o });

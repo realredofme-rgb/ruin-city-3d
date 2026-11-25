@@ -1,8 +1,8 @@
 // 环境音：全部用 WebAudio 现场合成，不需要音频文件
 // 风（随风力与高度）、雨、海浪（离海岸越近越响）、鸟叫（白天、低空）、电车铃、落石、雾笛——后几种是带方位的 3D 声源
 import * as THREE from 'three';
-import { shoreZ } from './world.js';
-import { clamp, smooth } from './util.js';
+import { shoreZ } from './terrain.js';
+import { clamp, smooth } from '../../util.js';
 
 export class Ambience {
   constructor() { this.on = false; this.ctx = null; }
