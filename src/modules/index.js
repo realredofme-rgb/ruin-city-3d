@@ -17,7 +17,7 @@ import { volcano as m5 } from './placeholders.js';
 
 import { ice as m6 } from './placeholders.js';
 
-import { salt as m7 } from './placeholders.js';
+import m7 from './salt-mirror/index.js';
 
 export const MODULES = [m1, m2, m3, m4, m5, m6, m7];
 export const ROUTE = ['ruin-city', 'sunken-wetland', 'sky-isles', 'volcano-forge', 'ice-wreck', 'salt-mirror', 'gobi-rift'];

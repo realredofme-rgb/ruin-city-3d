@@ -61,6 +61,7 @@ python3 -m http.server 8000
 | `src/planet/biomes.js` | 海洋、荒原、极地的地形与配色 |
 | `src/modules/ruin-city/` | 模块 1：城市（地形、建筑、生活、点击、声音、巡游镜头） |
 | `src/modules/placeholders.js` | 模块 2–7 的占位地貌 |
+| `src/modules/salt-mirror/` | 模块 7 盐湖镜原：镜面盐湖（kit.js 镜像几何、lake.js 三遍绘制的镜面）、列柱大道、巨环、天线阵等（structures.js） |
 | `src/util.js` | 随机数、噪声、几何合并构建器、程序化贴图 |
 | `vendor/` | Three.js 及所用 addons 的本地副本（MIT 许可，见 `vendor/THREE-LICENSE`） |
 
