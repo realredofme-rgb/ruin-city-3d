@@ -78,7 +78,7 @@ export function cloneMat(m) {
  * LOD1 的材质槽对到 LOD0 的材质上（按材质名；LOD1 里网格的先后顺序可能和 LOD0 不一样）。
  * slots：LOD1 自己的材质（只看名字），names：LOD0 的原始材质，use：LOD0 加工后实际用的材质
  */
-function sameSlots(slots, names, use) {
+export function sameSlots(slots, names, use) {
   if (!Array.isArray(slots)) return Array.isArray(use) ? use[0] : use;
   if (!Array.isArray(names)) return slots.map(() => use);
   return slots.map((m, i) => { const k = names.findIndex(n => n.name === m.name); return use[k >= 0 ? k : Math.min(i, use.length - 1)]; });
