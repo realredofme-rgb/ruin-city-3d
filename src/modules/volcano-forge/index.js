@@ -7,6 +7,7 @@ import { HeatField, forgeMaterial, ensureAttrs, LU } from './lava.js';
 import { buildForge } from './forge.js';
 import { makeSmoke, makeEmbers, makeHalos, FXU } from './fx.js';
 import { TOURS, HOME } from './tours.js';
+import { plantSnags } from './snags.js';
 
 /** 熔岩湖北岸的玄武岩柱（一根根六棱柱，台阶状地排开） */
 function basalt(root, heat) {
@@ -59,6 +60,7 @@ export default {
     const terrain = new THREE.Mesh(tg, forgeMaterial({ roughness: 0.95, metalness: 0 }, { key: 'terrain', grime: 0.45 }));
     terrain.receiveShadow = true; root.add(terrain);
     basalt(root, heat);
+    const snags = plantSnags(root);
     // 粒子
     const smoke = makeSmoke(F.smoke, 3), embers = makeEmbers(F.embers, 4), halos = makeHalos(F.halos);
     for (const p of [halos, smoke, embers]) root.add(p);
@@ -67,8 +69,9 @@ export default {
     return {
       lights: F.lights,
       ground,
-      update(dt, t, env) {
+      update(dt, t, env, camLocal) {
         LU.uTime.value = t; LU.uNight.value = env.night;
+        if (camLocal) snags.update(camLocal.position);
         const wa = 0.6 + t * 0.002; FXU.uWind.value.set(Math.cos(wa), Math.sin(wa)).multiplyScalar(4 + env.wind * 18);
         FXU.uScale.value = innerHeight * Math.min(devicePixelRatio, 1.25) * proj * 0.5;
         FXU.uDay.value = 1 - env.wx.fog * 0.25;
