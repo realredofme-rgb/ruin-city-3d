@@ -35,8 +35,9 @@ export default {
     return {
       lights: life.lights,
       ground,
-      update(dt, t, env) {
+      update(dt, t, env, camLocal) {
         WIND.uT.value = t; WIND.uWind.value = env.wind;
+        if (camLocal) for (const f of forest.flora) f.update(camLocal.position);
         nm.offset.set(t * 0.0021, t * 0.0013);
         water.material.normalScale.setScalar(0.1 + env.wind * 0.12 + (env.wx ? env.wx.rain : 0) * 0.5);
         for (const m of wetMats) m.roughness = THREE.MathUtils.lerp(m.userData.r0, 0.35, env.wet * 0.8);

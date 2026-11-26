@@ -69,6 +69,21 @@ export function loadModel(path) {
   return cache.get(path);
 }
 
+/** 复制一个材质，连同它的着色器改写（onBeforeCompile）和程序缓存键一起 */
+export function cloneMat(m) {
+  const c = m.clone(); c.onBeforeCompile = m.onBeforeCompile; c.customProgramCacheKey = m.customProgramCacheKey; return c;
+}
+
+/**
+ * LOD1 的材质槽对到 LOD0 的材质上（按材质名；LOD1 里网格的先后顺序可能和 LOD0 不一样）。
+ * slots：LOD1 自己的材质（只看名字），names：LOD0 的原始材质，use：LOD0 加工后实际用的材质
+ */
+export function sameSlots(slots, names, use) {
+  if (!Array.isArray(slots)) return Array.isArray(use) ? use[0] : use;
+  if (!Array.isArray(names)) return slots.map(() => use);
+  return slots.map((m, i) => { const k = names.findIndex(n => n.name === m.name); return use[k >= 0 ? k : Math.min(i, use.length - 1)]; });
+}
+
 /**
  * 把一个 InstancedMesh 换成 GLB 模型（实例矩阵不动）。tint(i) 可选，返回每个实例的颜色（乘在贴图上）。
  * 返回 Promise<boolean>：换成功为 true，加载失败为 false（保留占位）。
@@ -91,11 +106,12 @@ export function upgradeInstanced(im, path, tint) {
  * variants    GLB 路径列表，实例按序号轮流分给各个变体；每个变体还要有 <路径>_lod1.glb
  * near / mid  LOD0、LOD1 的最远距离（米）。near 为 0 时不用 LOD0；mid 不大于 near 时不用 LOD1（也不下载）
  * prep        可选，加工 GLB 的材质（比如加上风吹摇摆），返回新材质
+ * onReady     可选，所有变体都加载完（或失败）后调用，参数是是否全部成功
  *
  * 实例网格在构建时就全部建好（数量先为 0），这样星球挂载时能接管它们的 setMatrixAt。
  * 返回 { update(camPos) }：camPos 是相机在 parent 坐标系里的位置，相机走动时重新分一次远近。
  */
-export function floraLod(parent, items, placeholder, variants, { near = 60, mid = 260, prep, cast = true, flags = {} } = {}) {
+export function floraLod(parent, items, placeholder, variants, { near = 60, mid = 260, prep, cast = true, flags = {}, onReady } = {}) {
   const n = items.length, white = new THREE.Color(1, 1, 1);
   const mk = (cap, count) => {
     const im = new THREE.InstancedMesh(placeholder.geometry, placeholder.material, Math.max(cap, 1));
@@ -110,15 +126,17 @@ export function floraLod(parent, items, placeholder, variants, { near = 60, mid 
     const cap = Math.ceil((n - k) / variants.length);
     return { path, l0: near > 0 ? mk(cap, 0) : null, l1: mid > near ? mk(cap, 0) : null, ready: false };
   });
-  let dirty = false;
+  let dirty = false, pending = V.length, okAll = true;
   for (const v of V) {
-    Promise.all([v.l0 ? loadModel(v.path) : null, v.l1 ? loadModel(v.path + '_lod1') : null]).then(([a, b]) => {
-      const fix = m => (Array.isArray(m) ? m.map(x => prep ? prep(x) : x) : (prep ? prep(m) : m));
-      const mtl = fix((a || b).material); // LOD1 和 LOD0 共用一套材质
+    // LOD0 总要读：LOD1 文件里只有网格和材质槽，贴图从 LOD0 的同名材质拿
+    Promise.all([loadModel(v.path), v.l1 ? loadModel(v.path + '_lod1') : null]).then(([a, b]) => {
+      const fix = m => (prep ? prep(m) : m);
+      const mtl = Array.isArray(a.material) ? a.material.map(fix) : fix(a.material);
       if (v.l0) { v.l0.geometry = a.geometry; v.l0.material = mtl; }
-      if (v.l1) { v.l1.geometry = b.geometry; v.l1.material = mtl; }
+      if (v.l1) { v.l1.geometry = b.geometry; v.l1.material = sameSlots(b.material, a.material, mtl); }
       v.ready = true; dirty = true;
-    }).catch(e => console.warn('模型没加载上，继续用程序化的占位：', v.path, e.message || e));
+    }).catch(e => { okAll = false; console.warn('模型没加载上，继续用程序化的占位：', v.path, e.message || e); })
+      .finally(() => { if (--pending === 0 && onReady) onReady(okAll); });
   }
   const last = new THREE.Vector3(1e9, 0, 0);
   return {

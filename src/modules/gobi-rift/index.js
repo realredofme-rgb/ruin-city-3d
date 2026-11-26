@@ -24,7 +24,7 @@ export default {
     const mach = buildMachines(root, dust);
     const lampMat = dust(new THREE.MeshBasicMaterial({ vertexColors: true, color: 0x000000 }));
     const rail = new Railway(root, dust, lampMat, rnd);
-    buildFlora(root, dust, rnd);
+    const flora = buildFlora(root, dust, rnd);
     const storm = new Storm(root, frame, mach.falls);
     // 从太空看得见的夜灯：车站和小镇里还亮着的几扇窗、机械的眼睛
     const lights = [...rail.lamps.map(p => [p.x, p.y, p.z, 0.7]), ...mach.groups.flatMap(g => g.glowPts.map(p => [p.x, p.y, p.z, 0.9]))];
@@ -36,6 +36,7 @@ export default {
       walkStart: () => ({ x: xRail(1240) + 12, z: 1240, yaw: Math.PI }),
       update(dt, t, env, camLocal) {
         rail.update(dt);
+        if (camLocal) for (const f of flora) f.update(camLocal.position);
         const S = storm.update(dt, t, env, camLocal);
         // 机械微光：白天几乎看不见，入夜后慢慢呼吸；隔一阵会有一台「醒」过来，闪几秒
         if (t > nextWake) { const g = mach.groups[Math.floor(Math.random() * 3)]; g.wake = 1; nextWake = t + 25 + Math.random() * 50; }
