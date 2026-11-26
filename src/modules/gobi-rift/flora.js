@@ -1,4 +1,4 @@
-// 植被：台地上稀疏的灌丛，谷底和裂谷肩上的平顶金合欢（东非草原的剪影），绿洲边的棕榈和芦苇。
+// 植被（金合欢、棕榈、灌丛近处是 GLB，见 glbTrees 和灌丛部分）：台地上稀疏的灌丛，谷底和裂谷肩上的平顶金合欢（东非草原的剪影），绿洲边的棕榈和芦苇。
 import * as THREE from 'three';
 import { Kit, M } from './kit.js';
 import { dust } from './weather.js';
@@ -51,20 +51,22 @@ function palm(k, x, z, s, rnd) {
   return { x, y, z, ry: a, s: s * H / 12 }; // GLB 棕榈高 12 米
 }
 
+/** GLB 材质复制一份再套上戈壁的沙尘雾（缓存键接在原来的后面，免得和别的材质共用着色器程序） */
+const dustPrep = m => { const c = cloneMat(m), key = c.customProgramCacheKey(); dust(c); c.customProgramCacheKey = () => key + '|gobiDust'; return c; };
+
 /**
  * 金合欢和棕榈换成 GLB。树不多（一百来棵），加载好以后不论远近都用 GLB（近处 LOD0、其余 LOD1），
  * 程序化的整块树随之隐藏；加载失败就一直用程序化的。
  */
 function glbTrees(root, proc, acacias, palms) {
   const empty = { geometry: new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute([], 3)), material: new THREE.MeshBasicMaterial() };
-  const prep = m => { const c = cloneMat(m), key = c.customProgramCacheKey(); dust(c); c.customProgramCacheKey = () => key + '|gobiDust'; return c; };
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), white = new THREE.Color(1, 1, 1);
   const items = list => list.map(t => ({ m: m.compose(new THREE.Vector3(t.x, t.y, t.z), q.setFromAxisAngle(up, t.ry), new THREE.Vector3(t.s, t.s, t.s)).clone(), c: white }));
   let left = 2, ok = true;
   const done = good => { ok = ok && good; if (--left === 0 && ok) proc.visible = false; };
   return [
-    floraLod(root, items(acacias), empty, ['gobi-rift/acacia-1', 'gobi-rift/acacia-2'], { near: LOW_Q ? 0 : 120, mid: 1e9, prep, onReady: done }),
-    floraLod(root, items(palms), empty, ['gobi-rift/palm-1', 'gobi-rift/palm-2'], { near: LOW_Q ? 0 : 120, mid: 1e9, prep, onReady: done })
+    floraLod(root, items(acacias), empty, ['gobi-rift/acacia-1', 'gobi-rift/acacia-2'], { near: LOW_Q ? 0 : 120, mid: 1e9, prep: dustPrep, onReady: done }),
+    floraLod(root, items(palms), empty, ['gobi-rift/palm-1', 'gobi-rift/palm-2'], { near: LOW_Q ? 0 : 120, mid: 1e9, prep: dustPrep, onReady: done })
   ];
 }
 
@@ -105,14 +107,23 @@ export function buildFlora(root, dust, rnd) {
     if (slopeAt(x, z) > 0.45 || inButte(x, z, 1.0)) continue;
     list.push([x, z, 0.5 + rnd() * (wet > 0.3 ? 1.6 : 1.1), wet]);
   }
-  const im = new THREE.InstancedMesh(geo, dust(new THREE.MeshStandardMaterial({ roughness: 0.9, flatShading: true })), list.length);
+  // 近处换成 GLB 旱生灌木（60 米内 LOD0、300 米内 LOD1），更远保留程序化的小团。
+  // 水边湿润的用较饱满的 1 号，其余 1、2 号轮流（2 号更稀疏偏黄）
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), c = new THREE.Color();
-  list.forEach(([x, z, s, wet], i) => {
+  const lush = [], dry = [];
+  list.forEach(([x, z, s, wet]) => {
     e.set(0, rnd() * 6.28, 0); q.setFromEuler(e);
-    m.compose(new THREE.Vector3(x, ground(x, z) + s * 0.25, z), q, new THREE.Vector3(s * 1.2, s * 0.65, s * 1.1)); im.setMatrixAt(i, m);
-    c.copy(F.leafDry).lerp(F.leaf2, clamp(wet * 1.4 + rnd() * 0.3, 0, 1)).multiplyScalar(0.8 + rnd() * 0.3); im.setColorAt(i, c);
+    const y = ground(x, z);
+    const mp = m.compose(new THREE.Vector3(x, y + s * 0.25, z), q, new THREE.Vector3(s * 1.2, s * 0.65, s * 1.1)).clone();
+    const mg = m.compose(new THREE.Vector3(x, y - 0.08, z), q, new THREE.Vector3(s * 1.15, s * 1.05, s * 1.15)).clone();
+    const t = clamp(wet * 1.4 + rnd() * 0.3, 0, 1), k = 0.8 + rnd() * 0.3; // 两次取数的顺序和原来一样，后面芦苇的布局不变
+    c.copy(F.leafDry).lerp(F.leaf2, t).multiplyScalar(k);
+    (wet > 0.25 ? lush : dry).push({ m: mp, mg, c: c.clone(), g: new THREE.Color().setScalar(0.78 + (k - 0.8) * 1.1) });
   });
-  im.castShadow = true; im.receiveShadow = true; root.add(im);
+  const ph = { geometry: geo, material: dust(new THREE.MeshStandardMaterial({ roughness: 0.9, flatShading: true })) };
+  const near = LOW_Q ? 0 : 60, mid = LOW_Q ? 160 : 300;
+  lods.push(floraLod(root, lush, ph, ['gobi-rift/dry-shrub-1'], { near, mid, prep: dustPrep }));
+  lods.push(floraLod(root, dry, ph, ['gobi-rift/dry-shrub-1', 'gobi-rift/dry-shrub-2'], { near, mid, prep: dustPrep }));
 
   // 芦苇：绿洲水边的细长锥
   const rg = new THREE.ConeGeometry(0.12, 1, 4); rg.translate(0, 0.5, 0);
