@@ -1020,7 +1020,7 @@ export function buildCity(scene, M) {
     const items = bushes.map(([p, s]) => {
       // 立着长，只轻微歪一点（GLB 灌木有明确的上下）；占位是个以 p 为中心的球，GLB 的根在底面，往下埋一点
       dummy.position.copy(p); dummy.rotation.set((R() - 0.5) * 0.3, R() * 6, (R() - 0.5) * 0.3); dummy.scale.set(s * R.range(1, 1.6), s * R.range(0.6, 1), s * R.range(1, 1.6)); dummy.updateMatrix();
-      const m = dummy.matrix.clone(), mg = m.clone().multiply(new THREE.Matrix4().makeTranslation(0, -0.3, 0)).multiply(new THREE.Matrix4().makeScale(1, 1.4, 1)); // GLB 灌木偏扁，拉高一点
+      const m = dummy.matrix.clone(), mg = m.clone().multiply(new THREE.Matrix4().makeTranslation(0, -0.3, 0)).multiply(new THREE.Matrix4().makeScale(1, 1.15, 1)); // GLB 灌木略矮，稍微拉高
       const c = tc.setHSL(0.23 + R.range(-0.05, 0.04), 0.4, R.range(0.38, 0.55)).clone(), g = glbTint(c, 0.38, 0.55);
       return { m, mg, c: c.multiplyScalar(1.6), g };
     });

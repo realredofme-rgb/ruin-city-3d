@@ -207,7 +207,7 @@ export function palm(A, R, x, z, y0, H) {
 
 /* ---------- 材质 ---------- */
 export const WIND = { uT: { value: 0 }, uWind: { value: 0.2 } };
-function sway(mat, amp) {
+export function sway(mat, amp) {
   mat.onBeforeCompile = sh => {
     sh.uniforms.uT = WIND.uT; sh.uniforms.uWind = WIND.uWind;
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uT, uWind;')

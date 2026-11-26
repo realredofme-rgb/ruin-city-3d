@@ -3,11 +3,29 @@
 import * as THREE from 'three';
 import { rng, smooth, clamp, mat, lerp } from '../../util.js';
 import { Acc } from './geo.js';
-import { tree, palm, clump, LEAF, treeMaterials, FLOOD } from './trees.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { tree, palm, clump, LEAF, treeMaterials, FLOOD, sway } from './trees.js';
+import { floraLod, loadModel, cloneMat, LOW_Q } from '../../models.js';
 import { ground, nf, WATER, TEMPLE, channelZ } from './terrain.js';
 import { viaDist, templeSurf, DECK } from './ruins.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+/**
+ * 四棵 GLB 古树（45 米的模型按原来的高度放大）。网格在构建时就挂上（几何先空着），星球挂载才认得它们；
+ * 两个模型都读到以后换上，同时藏起程序化的那四棵。
+ */
+function ancientTrees(root, list, proc, M) {
+  const empty = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute([], 3));
+  const meshes = list.map((t, i) => {
+    const m = new THREE.Mesh(empty, M.wood); m.position.set(t.x, t.y0 - 0.5, t.z); m.rotation.y = i * 2.1 + 0.7; m.scale.setScalar(t.H / 45);
+    m.castShadow = m.receiveShadow = true; m.visible = false; root.add(m); return m;
+  });
+  Promise.all(['sunken-wetland/ancient-tree-1', 'sunken-wetland/ancient-tree-2'].map(loadModel)).then(models => {
+    meshes.forEach((m, i) => { const g = models[i % 2]; m.geometry = g.geometry; m.material = g.material; m.visible = true; });
+    for (const p of proc) p.visible = false;
+  }).catch(e => console.warn('古树模型没加载上，继续用程序化的：', e.message || e));
+}
 
 /** 泊松盘采样：在 rMax 以内撒点，间距至少 d，accept(x,z) 决定能不能种 */
 function scatter(R, n, d, rMax, accept, taken = []) {
@@ -43,12 +61,18 @@ export function plantForest(root, spots) {
     { x: spots.freight.x, z: spots.freight.z, y0: ground(spots.freight.x, spots.freight.z), H: 170, name: '货车厢里的古树' },
     { x: -260, z: 690, H: 160 }, { x: 990, z: -560, H: 185 }, { x: -1120, z: 760, H: 150 }, { x: 330, z: -930, H: 165 }
   ];
+  // 有名字的三棵和神庙、桥、货车厢长在一起，仍是程序化的；另外四棵换成 GLB 古树（加载前和加载失败时用程序化的顶上）
+  const AT = { wood: new Acc(), leaf: new Acc(), hang: new Acc() }, glbTitans = [];
   for (const t of T) {
     t.y0 ??= ground(t.x, t.z);
-    const RR = rng(t.x * 7 + t.z * 13 + 99);
-    tree(A, RR, { ...t, kind: 'titan', surf, leaf: [LEAF.deep, LEAF.blue, LEAF.dark][titans.length % 3] }, { fungi, tops });
+    const RR = rng(t.x * 7 + t.z * 13 + 99), glb = !t.name;
+    tree(glb ? AT : A, RR, { ...t, kind: 'titan', surf, leaf: [LEAF.deep, LEAF.blue, LEAF.dark][titans.length % 3] }, { fungi: glb ? [] : fungi, tops });
     titans.push({ x: t.x, z: t.z, y0: t.y0, H: t.H, r: 40, name: t.name });
+    if (glb) glbTitans.push(t);
   }
+  const titanProc = [AT.wood.build(M.wood), AT.leaf.build(M.leaf), AT.hang.build(M.hang, { cast: false })].filter(Boolean);
+  for (const m of titanProc) root.add(m);
+  ancientTrees(root, glbTitans, titanProc, M);
   // 神庙南墙上再趴一棵小一点的绞杀榕
   { const g = spots.gates.find(g => g.z < TEMPLE.z - 5); tree(A, rng(71), { x: g.x + 14, z: g.z, y0: templeSurf(g.x + 14, g.z) - 0.4, H: 60, kind: 'fig', surf, roots: 9, rootLen: 22, leaf: LEAF.yg }, { fungi, tops }); }
 
@@ -89,13 +113,24 @@ export function plantForest(root, spots) {
     const s = R.range(0.75, 1.45) * (v >= 4 ? 1 : lerp(0.85, 1.35, smooth(0.3, 0.8, nf(p.x * 0.003, p.z * 0.003, 2))));
     buckets[v].push(mat(p.x, y, p.z, R() * 6.28, R.range(-0.04, 0.04), R.range(-0.04, 0.04), s, s * R.range(0.9, 1.15), s));
   }
+  // 实例化的小树换成 GLB：近处 LOD0，其余全用 LOD1（比原来的程序化小树省得多）；加载前用程序化的占位
+  const GLB = [['sunken-wetland/rainforest-tree-1'], ['sunken-wetland/rainforest-tree-3'], ['sunken-wetland/rainforest-tree-2'], ['sunken-wetland/rainforest-tree-3'],
+    ['gobi-rift/palm-1'], ['gobi-rift/palm-2'], ['sunken-wetland/dead-tree-1', 'sunken-wetland/dead-tree-2']];
+  // GLB 原尺寸：雨林乔木 26 米、棕榈 12 米、枯树约 20 米；程序化的分别是 26、20/25、22 米
+  const fit = [1, 1, 1, 1, 20 / 12, 25 / 12, 22 / 19.5].map(k => new THREE.Matrix4().makeScale(k, k, k));
+  const prep = m => {
+    const c = cloneMat(m); if (c.name !== 'Leaf') return c;
+    const prev = c.onBeforeCompile, key = c.customProgramCacheKey(); sway(c, 0.5);
+    const sw = c.onBeforeCompile; c.onBeforeCompile = (sh, r) => { prev.call(c, sh, r); sw(sh, r); }; c.customProgramCacheKey = () => key + '|wetSway';
+    return c;
+  };
+  const flora = [], white = new THREE.Color(1, 1, 1);
   variants.forEach((v, k) => {
     const list = buckets[k]; if (!list.length) return;
-    [[v.g[0], M.wood], [v.g[1], M.leaf], [v.g[2], M.hang]].forEach(([g, m], j) => {
-      if (!g) return;
-      const im = new THREE.InstancedMesh(g, m, list.length); list.forEach((mm, i) => im.setMatrixAt(i, mm));
-      im.castShadow = j < 2; im.receiveShadow = true; root.add(im);
-    });
+    const parts = [[v.g[0], M.wood], [v.g[1], M.leaf], [v.g[2], M.hang]].filter(([g]) => g);
+    const geometry = mergeGeometries(parts.map(([g]) => g), true);
+    const items = list.map((mm, i) => ({ m: mm, mg: mm.clone().multiply(fit[k]), c: white, g: new THREE.Color().setScalar(0.74 + 0.2 * ((i * 0.618) % 1)) })); // GLB 叶子比湿地原来的配色亮，压暗一点
+    flora.push(floraLod(root, items, { geometry, material: parts.map(([, m]) => m) }, GLB[k], { near: LOW_Q ? 0 : 140, mid: 1e9, prep }));
   });
 
   /* ---- 倒木、芦苇、王莲 ---- */
@@ -143,5 +178,5 @@ export function plantForest(root, spots) {
   const flMat = new THREE.MeshStandardMaterial({ color: 0xf4eee0, roughness: 0.5, emissive: 0xfff2d8, emissiveIntensity: 0 });
   const flIM = new THREE.InstancedMesh(petal, flMat, flowers.length); flowers.forEach((m, i) => flIM.setMatrixAt(i, m)); root.add(flIM);
 
-  return { fungi, tops, titans, big, M, flMat, flowerPos: flowers.map(m => new THREE.Vector3().setFromMatrixPosition(m)) };
+  return { fungi, tops, titans, big, M, flMat, flora, flowerPos: flowers.map(m => new THREE.Vector3().setFromMatrixPosition(m)) };
 }
